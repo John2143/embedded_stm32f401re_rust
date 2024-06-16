@@ -1,14 +1,12 @@
 #![no_std]
 #![no_main]
 
-use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
-use embassy_stm32::gpio::{AnyPin, Input, Level, Output, Speed, Pin, Pull};
-use embassy_stm32::Peripherals;
+use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Speed};
+use embassy_time::Timer;
 
-use panic_probe as _;
 use defmt_rtt as _;
+use panic_probe as _;
 
 // Declare async tasks
 #[embassy_executor::task]

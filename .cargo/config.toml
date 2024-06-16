@@ -1,2 +1,5 @@
+[target.'thumbv7em-none-eabihf']
+runner = "sudo probe-rs run --chip stm32f401RETx"
+
 [build]
 target = "thumbv7em-none-eabihf"
