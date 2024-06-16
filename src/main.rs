@@ -53,8 +53,6 @@ async fn main(spawner: Spawner) {
     cfg.sda_pullup = true;
     cfg.scl_pullup = true;
     let mut i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH6, p.DMA1_CH1, spd, cfg);
-    let x = i2c.write(0x80, b"yey").await;
-    println!("I2C result {:?}", x);
 
     println!("Starting blinking program");
     SIGNAL_A.store(100, Ordering::SeqCst);
@@ -68,6 +66,8 @@ async fn main(spawner: Spawner) {
             Timer::after_millis(10).await;
         }
 
+        let x = i2c.write(0x25, b"yey").await;
+        println!("I2C result {:?}", x);
         println!("Button pressed!");
         SIGNAL_A.store(50, Ordering::SeqCst);
         SIGNAL_B.store(50, Ordering::SeqCst);
