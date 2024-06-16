@@ -68,6 +68,7 @@ checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
 dependencies = [
  "bare-metal",
  "bitfield",
+ "critical-section",
  "embedded-hal 0.2.7",
  "volatile-register",
 ]
@@ -166,6 +167,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt-rtt"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bab697b3dbbc1750b7c8b821aa6f6e7f2480b47a99bc057a2ed7b170ebef0c51"
+dependencies = [
+ "critical-section",
+ "defmt",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -200,8 +211,11 @@ checksum = "ec648daedd2143466eff4b3e8002024f9f6c1de4ab7666bb679688752624c925"
 dependencies = [
  "cortex-m",
  "critical-section",
+ "defmt",
  "document-features",
  "embassy-executor-macros",
+ "embassy-time-driver",
+ "embassy-time-queue-driver",
 ]
 
 [[package]]
@@ -221,6 +235,9 @@ name = "embassy-futures"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
+dependencies = [
+ "defmt",
+]
 
 [[package]]
 name = "embassy-hal-internal"
@@ -363,6 +380,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c4c685bbef7fe13c3c6dd4da26841ed3980ef33e841cddfa15ce8a8fb3f1884"
 dependencies = [
  "embedded-hal 1.0.0",
+]
+
+[[package]]
+name = "embedded-hal-bus"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d3980bf28e8577db59fe2bdb3df868a419469d2cecb363644eea2b6f7797669"
+dependencies = [
+ "critical-section",
+ "embedded-hal 1.0.0",
+ "portable-atomic",
 ]
 
 [[package]]
@@ -544,6 +572,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "panic-probe"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4047d9235d1423d66cc97da7d07eddb54d4f154d6c13805c6d0793956f4f25b0"
+dependencies = [
+ "cortex-m",
+ "defmt",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -554,6 +592,12 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "portable-atomic"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 
 [[package]]
 name = "proc-macro-error"
@@ -595,6 +639,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "rand"
+version = "0.8.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+dependencies = [
+ "rand_core",
 ]
 
 [[package]]
@@ -662,10 +715,19 @@ dependencies = [
 name = "stm32_1"
 version = "0.1.0"
 dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
  "defmt",
+ "defmt-rtt",
  "embassy-executor",
+ "embassy-futures",
  "embassy-stm32",
  "embassy-time",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-hal-bus",
+ "panic-probe",
+ "rand",
 ]
 
 [[package]]
