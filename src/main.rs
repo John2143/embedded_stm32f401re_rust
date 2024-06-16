@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-use bme280::i2c::BME280;
-use defmt::println;
+use bme280::i2c::{AsyncBME280, BME280};
+use defmt::{info, println};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts, dma::NoDma, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, pac::i2c::I2c, peripherals, time::Hertz, usart::{self, UartTx}
@@ -50,38 +50,49 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
-    let spd = Hertz::hz(250_000 * 2);
-    let mut cfg = embassy_stm32::i2c::Config::default();
-    cfg.sda_pullup = true;
-    cfg.scl_pullup = true;
-    let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, NoDma, NoDma, spd, cfg);
-    let mut bme = BME280::new_secondary(i2c);
+    let mut bme = {
+        let spd = Hertz::hz(250_000);
+        let mut cfg = embassy_stm32::i2c::Config::default();
+        cfg.sda_pullup = true;
+        cfg.scl_pullup = true;
 
-    let mut dly = Delay;
-    bme.init(&mut dly).unwrap();
+        let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg);
+        AsyncBME280::new_secondary(i2c)
+    };
+
+    let bme_init_res = bme.init(&mut Delay).await;
+    if bme_init_res.is_err() {
+        println!("BME280 init failed!");
+        return;
+    }
 
     println!("Starting blinking program");
-    SIGNAL_A.store(100, Ordering::SeqCst);
     spawner.spawn(blink(p.PA5.degrade())).unwrap();
+
+    // Measure BME280 (temp, pressure, humid) data once
+    let m = bme.measure(&mut Delay).await.unwrap();
+    println!("BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
 
     let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
     loop {
-        //let _ = usart.blocking_write(b"Hello World\n").unwrap();
-        //Timer::after_millis(10).await;
+        // we use a pullup resistor, so the button is active low
         while button.is_high() {
             Timer::after_millis(10).await;
         }
 
         println!("Button pressed!");
+        // Blink faster
         SIGNAL_A.store(50, Ordering::SeqCst);
         SIGNAL_B.store(50, Ordering::SeqCst);
 
         while button.is_low() {
-            let m = bme.measure(&mut dly).unwrap();
+            let m = bme.measure(&mut Delay).await.unwrap();
             println!("I2C result: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
             Timer::after_millis(10).await;
         }
+
         println!("Button released!");
+        // Blink slower
         SIGNAL_A.store(100, Ordering::SeqCst);
         SIGNAL_B.store(900, Ordering::SeqCst);
     }
