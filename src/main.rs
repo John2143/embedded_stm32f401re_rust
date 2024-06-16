@@ -1,13 +1,15 @@
 #![no_std]
 #![no_main]
 
+use bme280::i2c::BME280;
 use defmt::println;
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts, dma::NoDma, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, pac::i2c::I2c, peripherals, time::Hertz, usart::{self, UartTx}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
-use embassy_time::Timer;
+use embassy_time::{Delay, Timer};
+use embedded_hal::delay::DelayNs;
 
 use core::{
     borrow::BorrowMut,
@@ -48,11 +50,15 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
-    let spd = Hertz::hz(115200);
+    let spd = Hertz::hz(250_000 * 2);
     let mut cfg = embassy_stm32::i2c::Config::default();
     cfg.sda_pullup = true;
     cfg.scl_pullup = true;
-    let mut i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH6, p.DMA1_CH1, spd, cfg);
+    let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, NoDma, NoDma, spd, cfg);
+    let mut bme = BME280::new_secondary(i2c);
+
+    let mut dly = Delay;
+    bme.init(&mut dly).unwrap();
 
     println!("Starting blinking program");
     SIGNAL_A.store(100, Ordering::SeqCst);
@@ -66,13 +72,13 @@ async fn main(spawner: Spawner) {
             Timer::after_millis(10).await;
         }
 
-        let x = i2c.write(0x25, b"yey").await;
-        println!("I2C result {:?}", x);
         println!("Button pressed!");
         SIGNAL_A.store(50, Ordering::SeqCst);
         SIGNAL_B.store(50, Ordering::SeqCst);
 
         while button.is_low() {
+            let m = bme.measure(&mut dly).unwrap();
+            println!("I2C result: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
             Timer::after_millis(10).await;
         }
         println!("Button released!");
