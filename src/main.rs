@@ -18,9 +18,9 @@ async fn blink(pin: AnyPin) {
     loop {
         // Timekeeping is globally available, no need to mess with hardware timers.
         led.set_high();
-        Timer::after_millis(150).await;
+        Timer::after_millis(500).await;
         led.set_low();
-        Timer::after_millis(150).await;
+        Timer::after_millis(200).await;
     }
 }
 
@@ -32,6 +32,9 @@ async fn main(spawner: Spawner) {
     // Spawned tasks run in the background, concurrently.
     spawner.spawn(blink(p.PA5.degrade())).unwrap();
     //spawner.spawn(blink(p.PB13.degrade())).unwrap();
+    loop {
+        Timer::after_secs(5).await;
+    }
 
     // let mut button = Input::new(p.PC13, Pull::Up);
     // loop {
