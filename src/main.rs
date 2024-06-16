@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use defmt::println;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{AnyPin, Level, Output, Pin, Speed};
 use embassy_time::Timer;
@@ -16,9 +17,9 @@ async fn blink(pin: AnyPin) {
     loop {
         // Timekeeping is globally available, no need to mess with hardware timers.
         led.set_high();
-        Timer::after_millis(500).await;
+        Timer::after_millis(100).await;
         led.set_low();
-        Timer::after_millis(200).await;
+        Timer::after_millis(900).await;
     }
 }
 
@@ -32,6 +33,7 @@ async fn main(spawner: Spawner) {
     //spawner.spawn(blink(p.PB13.degrade())).unwrap();
     loop {
         Timer::after_secs(5).await;
+        println!("This is a tset");
     }
 
     // let mut button = Input::new(p.PC13, Pull::Up);
