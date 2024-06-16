@@ -1,26 +1,22 @@
 #![no_std]
 #![no_main]
 
-use bme280::i2c::{AsyncBME280, BME280};
-use defmt::{info, println};
+use bme280::i2c::AsyncBME280;
+use defmt::println;
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts, dma::NoDma, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, pac::i2c::I2c, peripherals, time::Hertz, usart::{self, UartTx}
+    bind_interrupts,
+    gpio::{AnyPin, Level, Output, Pin, Pull, Speed},
+    i2c, peripherals,
+    time::Hertz,
 };
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, signal::Signal};
 use embassy_time::{Delay, Timer};
-use embedded_hal::delay::DelayNs;
 
-use core::{
-    borrow::BorrowMut,
-    cell::{OnceCell, RefCell},
-    sync::atomic::{AtomicU32, Ordering},
-};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt_rtt as _;
 use panic_probe as _;
 
-// Declare async tasks
 #[embassy_executor::task]
 async fn blink(pin: AnyPin) {
     let mut led = Output::new(pin, Level::Low, Speed::High);
@@ -28,7 +24,7 @@ async fn blink(pin: AnyPin) {
     loop {
         let timing_a = SIGNAL_A.load(Ordering::SeqCst) as u64;
         let timing_b = SIGNAL_B.load(Ordering::SeqCst) as u64;
-        // Timekeeping is globally available, no need to mess with hardware timers.
+
         led.set_high();
         Timer::after_millis(timing_a).await;
         led.set_low();
@@ -56,7 +52,9 @@ async fn main(spawner: Spawner) {
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg);
+        let i2c = embassy_stm32::i2c::I2c::new(
+            p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg,
+        );
         AsyncBME280::new_secondary(i2c)
     };
 
@@ -71,7 +69,10 @@ async fn main(spawner: Spawner) {
 
     // Measure BME280 (temp, pressure, humid) data once
     let m = bme.measure(&mut Delay).await.unwrap();
-    println!("BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
+    println!(
+        "BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}",
+        m.pressure, m.temperature, m.humidity
+    );
 
     let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
     loop {
@@ -87,7 +88,10 @@ async fn main(spawner: Spawner) {
 
         while button.is_low() {
             let m = bme.measure(&mut Delay).await.unwrap();
-            println!("I2C result: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
+            println!(
+                "I2C result: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}",
+                m.pressure, m.temperature, m.humidity
+            );
             Timer::after_millis(10).await;
         }
 
