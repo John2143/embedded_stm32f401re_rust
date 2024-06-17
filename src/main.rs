@@ -5,7 +5,7 @@ use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals, time::Hertz, PeripheralRef
+    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals, time::Hertz, timer::simple_pwm::PwmPin, PeripheralRef
 };
 use embassy_time::{Delay, Timer};
 
@@ -49,11 +49,8 @@ async fn main(spawner: Spawner) {
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        embassy_stm32::i2c::I2c::new(PeripheralRef::new(p.I2C1), PeripheralRef::new(p.PB8), PeripheralRef::new(p.PB9), Irqs, PeripheralRef::new(p.DMA1_CH7), PeripheralRef::new(p.DMA1_CH5), spd, cfg)
+        embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg)
     };
-
-
-
 
     let mut bme = {
         let mut bme = AsyncBME280::new_secondary(i2c);
@@ -69,6 +66,36 @@ async fn main(spawner: Spawner) {
     let _icm = {
         //let mut icm = icm20948_driver::icm20948::i2c::IcmImu::new(i2c, 
 
+    };
+
+    {
+        // D6 / PB10 = TIM2CH3
+        // D5 / PB4 = TIM3CH1
+        // D3 / PB3 = TIM2CH2
+        //
+        // D7 / PA8 = TIM1CH1
+        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(p.TIM1, Some(PwmPin::new_ch1(p.PA8, embassy_stm32::gpio::OutputType::PushPull)), None, None, None, Hertz::hz(50), embassy_stm32::timer::CountingMode::EdgeAlignedUp);
+
+        let max = pwm.get_max_duty();
+        let lowest = max / 25; // 800us at 50Hz
+        let highest = max / 10; // 2ms at 50Hz
+
+        let target_percent = 0.25;
+        // lerp between lowest and highest based on target_percent
+        let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
+
+        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
+        pwm.enable(embassy_stm32::timer::Channel::Ch1);
+
+        for i in 0..100 {
+            let target_percent = i as f32 / 100.0;
+            // lerp between lowest and highest based on target_percent
+            let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
+
+            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
+
+            Timer::after_millis(10).await;
+        }
     };
 
     println!("Starting blinking program");
