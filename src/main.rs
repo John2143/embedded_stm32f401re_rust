@@ -10,6 +10,7 @@ use embassy_stm32::{
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Timer};
+use icm20948_async::{AccRange, GyrUnit, Icm20948};
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -45,19 +46,20 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
-    let i2c = {
+    let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg)
+        let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg);
+        Mutex::<NoopRawMutex, _>::new(i2c)
     };
 
-    let i2c_mtx = Mutex::<NoopRawMutex, _>::new(i2c);
 
-    let mut bme = {
-        let bus = I2cDevice::new(&i2c_mtx);
+    // BME280 example
+    let _sensor_bme = {
+        let bus = I2cDevice::new(&shared_i2c_bus);
         let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
         if bme_init_res.is_err() {
@@ -65,15 +67,32 @@ async fn main(spawner: Spawner) {
             return;
         }
 
+        let m = bme.measure(&mut Delay).await.unwrap();
+        let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
+        println!("BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}", m.pressure, m.temperature, temp_f, m.humidity);
+
         bme
     };
 
-    let _icm = {
-        //let bus = I2cDevice::new(&i2c_mtx);
-        //let mut icm = icm20948_driver::icm20948::i2c::IcmImu::new(bus, i)
+    // ICM20948 example
+    let _sensor_imu = {
+        let bus = I2cDevice::new(&shared_i2c_bus);
+        let mut icm = Icm20948::new_i2c(bus, Delay)
+            .gyr_unit(GyrUnit::Rps)
+            .gyr_dlp(icm20948_async::GyrDlp::Hz196)
+            .acc_range(AccRange::Gs8)
+            .set_address(0x69)
+            .initialize_9dof()
+            .await
+            .unwrap();
 
+        let stuff = icm.read_9dof().await.unwrap();
+        println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+
+        icm
     };
 
+    // PWM servo example
     {
         // D6 / PB10 = TIM2CH3
         // D5 / PB4 = TIM3CH1
@@ -104,13 +123,9 @@ async fn main(spawner: Spawner) {
         }
     };
 
+    // Blinking LED example
     println!("Starting blinking program");
     spawner.spawn(blink(p.PA5.degrade())).unwrap();
-
-    // Measure BME280 (temp, pressure, humid) data once
-    let m = bme.measure(&mut Delay).await.unwrap();
-    let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
-    println!("BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}", m.pressure, m.temperature, temp_f, m.humidity);
 
     let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
     loop {
@@ -124,14 +139,6 @@ async fn main(spawner: Spawner) {
         SIGNAL_A.store(50, Ordering::SeqCst);
         SIGNAL_B.store(50, Ordering::SeqCst);
 
-        //while button.is_low() {
-            //embassy_futures::join::join(async {
-                //let m = bme.measure(&mut Delay).await.unwrap();
-                //println!("BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
-            //}, async {
-                //Timer::after_millis(1000).await
-            //}).await;
-        //}
         while button.is_low() {
             Timer::after_millis(10).await;
         }
