@@ -3,10 +3,12 @@
 
 use bme280::i2c::AsyncBME280;
 use defmt::println;
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals, time::Hertz, timer::simple_pwm::PwmPin, PeripheralRef
+    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, DMA1_CH5, DMA1_CH7, I2C1}, time::Hertz, timer::simple_pwm::PwmPin, PeripheralRef
 };
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Timer};
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -52,8 +54,11 @@ async fn main(spawner: Spawner) {
         embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg)
     };
 
+    let i2c_mtx = Mutex::<NoopRawMutex, _>::new(i2c);
+
     let mut bme = {
-        let mut bme = AsyncBME280::new_secondary(i2c);
+        let bus = I2cDevice::new(&i2c_mtx);
+        let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
         if bme_init_res.is_err() {
             println!("BME280 init failed!");
@@ -64,7 +69,8 @@ async fn main(spawner: Spawner) {
     };
 
     let _icm = {
-        //let mut icm = icm20948_driver::icm20948::i2c::IcmImu::new(i2c, 
+        //let bus = I2cDevice::new(&i2c_mtx);
+        //let mut icm = icm20948_driver::icm20948::i2c::IcmImu::new(bus, i)
 
     };
 
