@@ -75,7 +75,7 @@ async fn main(spawner: Spawner) {
     };
 
     // ICM20948 example
-    let _sensor_imu = {
+    let mut _sensor_imu = {
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut icm = Icm20948::new_i2c(bus, Delay)
             .gyr_unit(GyrUnit::Rps)
@@ -112,14 +112,17 @@ async fn main(spawner: Spawner) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
         pwm.enable(embassy_stm32::timer::Channel::Ch1);
 
-        for i in 0..100 {
+        for i in 0..10 {
             let target_percent = i as f32 / 100.0;
             // lerp between lowest and highest based on target_percent
             let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
 
             pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
 
-            Timer::after_millis(10).await;
+            Timer::after_millis(100).await;
+
+            let stuff = _sensor_imu.read_9dof().await.unwrap();
+            println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
         }
     };
 
