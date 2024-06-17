@@ -4,7 +4,6 @@
 use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
 use embassy_stm32::{
     bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals, time::Hertz, PeripheralRef
 };
@@ -44,22 +43,33 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
-    let mut bme = {
+    let i2c = {
         let spd = Hertz::hz(250_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        let i2c = embassy_stm32::i2c::I2c::new(PeripheralRef::new(p.I2C1), PeripheralRef::new(p.PB8), PeripheralRef::new(p.PB9), Irqs, PeripheralRef::new(p.DMA1_CH7), PeripheralRef::new(p.DMA1_CH5), spd, cfg);
-        AsyncBME280::new_secondary(i2c)
+        embassy_stm32::i2c::I2c::new(PeripheralRef::new(p.I2C1), PeripheralRef::new(p.PB8), PeripheralRef::new(p.PB9), Irqs, PeripheralRef::new(p.DMA1_CH7), PeripheralRef::new(p.DMA1_CH5), spd, cfg)
     };
 
 
-    let bme_init_res = bme.init(&mut Delay).await;
-    if bme_init_res.is_err() {
-        println!("BME280 init failed!");
-        return;
-    }
+
+
+    let mut bme = {
+        let mut bme = AsyncBME280::new_secondary(i2c);
+        let bme_init_res = bme.init(&mut Delay).await;
+        if bme_init_res.is_err() {
+            println!("BME280 init failed!");
+            return;
+        }
+
+        bme
+    };
+
+    let _icm = {
+        //let mut icm = icm20948_driver::icm20948::i2c::IcmImu::new(i2c, 
+
+    };
 
     println!("Starting blinking program");
     spawner.spawn(blink(p.PA5.degrade())).unwrap();
@@ -82,7 +92,7 @@ async fn main(spawner: Spawner) {
         SIGNAL_B.store(50, Ordering::SeqCst);
 
         //while button.is_low() {
-            //join(async {
+            //embassy_futures::join::join(async {
                 //let m = bme.measure(&mut Delay).await.unwrap();
                 //println!("BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
             //}, async {
