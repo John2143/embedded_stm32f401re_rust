@@ -6,7 +6,7 @@ use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, DMA1_CH5, DMA1_CH7, I2C1}, time::Hertz, timer::simple_pwm::PwmPin, PeripheralRef
+    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self}, time::Hertz, timer::simple_pwm::PwmPin
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Timer};
@@ -46,6 +46,10 @@ bind_interrupts!(struct Irqs {
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
+    // Blinking LED example
+    println!("Starting blinking program");
+    spawner.spawn(blink(p.PA5.degrade())).unwrap();
+
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
@@ -56,6 +60,7 @@ async fn main(spawner: Spawner) {
         Mutex::<NoopRawMutex, _>::new(i2c)
     };
 
+    Timer::after_millis(10).await;
 
     // BME280 example
     let _sensor_bme = {
@@ -74,12 +79,14 @@ async fn main(spawner: Spawner) {
         bme
     };
 
+    Timer::after_millis(10).await;
+
     // ICM20948 example
     let mut _sensor_imu = {
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut icm = Icm20948::new_i2c(bus, Delay)
-            .gyr_unit(GyrUnit::Rps)
-            .gyr_dlp(icm20948_async::GyrDlp::Hz196)
+            .gyr_unit(GyrUnit::Dps)
+            .gyr_dlp(icm20948_async::GyrDlp::Hz24)
             .acc_range(AccRange::Gs8)
             .set_address(0x69)
             .initialize_9dof()
@@ -91,6 +98,9 @@ async fn main(spawner: Spawner) {
 
         icm
     };
+
+    Timer::after_millis(10).await;
+
 
     // PWM servo example
     {
@@ -113,22 +123,18 @@ async fn main(spawner: Spawner) {
         pwm.enable(embassy_stm32::timer::Channel::Ch1);
 
         for i in 0..10 {
-            let target_percent = i as f32 / 100.0;
+            let target_percent = i as f32 / 10.0;
             // lerp between lowest and highest based on target_percent
             let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
 
             pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
 
-            Timer::after_millis(100).await;
+            Timer::after_millis(250).await;
 
             let stuff = _sensor_imu.read_9dof().await.unwrap();
             println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
         }
     };
-
-    // Blinking LED example
-    println!("Starting blinking program");
-    spawner.spawn(blink(p.PA5.degrade())).unwrap();
 
     let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
     loop {
@@ -143,7 +149,9 @@ async fn main(spawner: Spawner) {
         SIGNAL_B.store(50, Ordering::SeqCst);
 
         while button.is_low() {
-            Timer::after_millis(10).await;
+            let acc = _sensor_imu.read_acc().await.unwrap();
+            println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
+            Timer::after_millis(100).await;
         }
 
         println!("Button released!");
