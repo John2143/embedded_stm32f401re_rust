@@ -4,11 +4,9 @@
 use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_stm32::{
-    bind_interrupts,
-    gpio::{AnyPin, Level, Output, Pin, Pull, Speed},
-    i2c, peripherals,
-    time::Hertz,
+    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals, time::Hertz, PeripheralRef
 };
 use embassy_time::{Delay, Timer};
 
@@ -52,11 +50,10 @@ async fn main(spawner: Spawner) {
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        let i2c = embassy_stm32::i2c::I2c::new(
-            p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg,
-        );
+        let i2c = embassy_stm32::i2c::I2c::new(PeripheralRef::new(p.I2C1), PeripheralRef::new(p.PB8), PeripheralRef::new(p.PB9), Irqs, PeripheralRef::new(p.DMA1_CH7), PeripheralRef::new(p.DMA1_CH5), spd, cfg);
         AsyncBME280::new_secondary(i2c)
     };
+
 
     let bme_init_res = bme.init(&mut Delay).await;
     if bme_init_res.is_err() {
@@ -69,10 +66,8 @@ async fn main(spawner: Spawner) {
 
     // Measure BME280 (temp, pressure, humid) data once
     let m = bme.measure(&mut Delay).await.unwrap();
-    println!(
-        "BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}",
-        m.pressure, m.temperature, m.humidity
-    );
+    let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
+    println!("BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}", m.pressure, m.temperature, temp_f, m.humidity);
 
     let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
     loop {
@@ -86,12 +81,15 @@ async fn main(spawner: Spawner) {
         SIGNAL_A.store(50, Ordering::SeqCst);
         SIGNAL_B.store(50, Ordering::SeqCst);
 
+        //while button.is_low() {
+            //join(async {
+                //let m = bme.measure(&mut Delay).await.unwrap();
+                //println!("BME: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}", m.pressure, m.temperature, m.humidity);
+            //}, async {
+                //Timer::after_millis(1000).await
+            //}).await;
+        //}
         while button.is_low() {
-            let m = bme.measure(&mut Delay).await.unwrap();
-            println!(
-                "I2C result: \n\tpressure: {}\n\ttemp: {}\n\thumid: {}",
-                m.pressure, m.temperature, m.humidity
-            );
             Timer::after_millis(10).await;
         }
 
