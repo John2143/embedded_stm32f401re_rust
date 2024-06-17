@@ -3,7 +3,7 @@
 
 use bme280::i2c::AsyncBME280;
 use defmt::println;
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
+use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice, spi::SpiDevice};
 use embassy_executor::Spawner;
 use embassy_stm32::{
     bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self}, time::Hertz, timer::simple_pwm::PwmPin
@@ -43,12 +43,12 @@ bind_interrupts!(struct Irqs {
 
 // Main is itself an async task as well.
 #[embassy_executor::main]
-async fn main(spawner: Spawner) {
+async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
     // Blinking LED example
-    println!("Starting blinking program");
-    spawner.spawn(blink(p.PA5.degrade())).unwrap();
+    //println!("Starting blinking program");
+    //_spawner.spawn(blink(p.PA5.degrade())).unwrap();
 
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
@@ -60,8 +60,41 @@ async fn main(spawner: Spawner) {
         Mutex::<NoopRawMutex, _>::new(i2c)
     };
 
+    let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
+    let shared_spi_bus = {
+        let mut cfg = embassy_stm32::spi::Config::default();
+        cfg.frequency = Hertz::hz(50_000); // up to 7mhz
+        let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
+        Mutex::<NoopRawMutex, _>::new(spi)
+    };
+
     Timer::after_millis(10).await;
 
+    {
+        let mut bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, Output::new(p.PC7, Level::High, Speed::High));
+
+        use embedded_hal_async::spi::SpiDevice;
+        bus.write(b"test").await.unwrap();
+
+        let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
+        loop {
+            // we use a pullup resistor, so the button is active low
+            while button.is_high() {
+                Timer::after_millis(10).await;
+            }
+            println!("Button pushed!");
+
+            while button.is_low() {
+                bus.write(b"test").await.unwrap();
+                //let acc = _sensor_imu.read_acc().await.unwrap();
+                //println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
+                Timer::after_millis(100).await;
+            }
+            println!("Button released!");
+        }
+    }
+
+    Timer::after_millis(10).await;
     // BME280 example
     let _sensor_bme = {
         let bus = I2cDevice::new(&shared_i2c_bus);
@@ -82,21 +115,50 @@ async fn main(spawner: Spawner) {
     Timer::after_millis(10).await;
 
     // ICM20948 example
-    let mut _sensor_imu = {
+    let mut sensor_imu_i2c = {
         let bus = I2cDevice::new(&shared_i2c_bus);
-        let mut icm = Icm20948::new_i2c(bus, Delay)
+        match Icm20948::new_i2c(bus, Delay)
             .gyr_unit(GyrUnit::Dps)
             .gyr_dlp(icm20948_async::GyrDlp::Hz24)
             .acc_range(AccRange::Gs8)
             .set_address(0x69)
             .initialize_9dof()
-            .await
-            .unwrap();
+            .await {
+                Ok(mut icm) => {
+                    let stuff = icm.read_9dof().await.unwrap();
+                    println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+                    Some(icm)
+                },
+                Err(_) => {
+                    println!("ICM20948 i2c init failed!");
+                    None
+                }
+        }
+    };
 
-        let stuff = icm.read_9dof().await.unwrap();
-        println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-
-        icm
+    let mut sensor_imu_spi = {
+        let bus = SpiDevice::new(&shared_spi_bus, cs_icm20948);
+        match Icm20948::new_spi(bus, Delay)
+            .gyr_unit(GyrUnit::Dps)
+            .gyr_dlp(icm20948_async::GyrDlp::Hz24)
+            .acc_range(AccRange::Gs8)
+            .initialize_9dof()
+            .await {
+                Ok(mut icm) => {
+                    let stuff = icm.read_9dof().await.unwrap();
+                    println!("ICM20948 spi: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+                    Some(icm)
+                },
+                Err(e) => {
+                    println!("ICM20948 spi init failed:");
+                    match e {
+                        icm20948_async::IcmError::BusError(_e) => println!("Bus error"),
+                        icm20948_async::IcmError::ImuSetupError => println!("IMU setup error"),
+                        icm20948_async::IcmError::MagSetupError => println!("MAG setup error"),
+                    };
+                    None
+                }
+        }
     };
 
     Timer::after_millis(10).await;
@@ -131,8 +193,10 @@ async fn main(spawner: Spawner) {
 
             Timer::after_millis(250).await;
 
-            let stuff = _sensor_imu.read_9dof().await.unwrap();
-            println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+            if let Some(sens) = &mut sensor_imu_i2c {
+                let stuff = sens.read_9dof().await.unwrap();
+                println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+            }
         }
     };
 
@@ -149,8 +213,8 @@ async fn main(spawner: Spawner) {
         SIGNAL_B.store(50, Ordering::SeqCst);
 
         while button.is_low() {
-            let acc = _sensor_imu.read_acc().await.unwrap();
-            println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
+            //let acc = _sensor_imu.read_acc().await.unwrap();
+            //println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
             Timer::after_millis(100).await;
         }
 
