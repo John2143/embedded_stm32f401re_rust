@@ -3,8 +3,9 @@
 
 use bme280::i2c::AsyncBME280;
 use defmt::println;
-use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice, spi::SpiDevice};
+use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
 use embassy_executor::Spawner;
+use embassy_futures::join::join;
 use embassy_stm32::{
     bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self}, time::Hertz, timer::simple_pwm::PwmPin
 };
@@ -46,10 +47,6 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
 
-    // Blinking LED example
-    //println!("Starting blinking program");
-    //_spawner.spawn(blink(p.PA5.degrade())).unwrap();
-
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
@@ -60,7 +57,6 @@ async fn main(_spawner: Spawner) {
         Mutex::<NoopRawMutex, _>::new(i2c)
     };
 
-    let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
     let shared_spi_bus = {
         let mut cfg = embassy_stm32::spi::Config::default();
         cfg.frequency = Hertz::hz(5_000_000); // up to 7mhz
@@ -70,55 +66,26 @@ async fn main(_spawner: Spawner) {
         Mutex::<NoopRawMutex, _>::new(spi)
     };
 
-    Timer::after_millis(10).await;
-
-    {
-        let mut bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, Output::new(p.PC7, Level::High, Speed::High));
-
-        use embedded_hal_async::spi::SpiDevice;
-        //bus.write(b"test").await.unwrap();
-        println!("Test written over bus");
-
-        let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
-        loop {
-            // we use a pullup resistor, so the button is active low
-            while button.is_high() {
-                Timer::after_millis(10).await;
-            }
-            println!("Button pushed!");
-
-            while button.is_low() {
-                bus.write(&[1,3,8]).await.unwrap();
-                //let acc = _sensor_imu.read_acc().await.unwrap();
-                //println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
-                Timer::after_millis(100).await;
-            }
-            println!("Button released!");
-        }
-    }
-
-    Timer::after_millis(10).await;
     // BME280 example
-    let _sensor_bme = {
+    let get_sensor_bme = async {
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
         if bme_init_res.is_err() {
             println!("BME280 init failed!");
-            return;
+            return None;
         }
 
         let m = bme.measure(&mut Delay).await.unwrap();
         let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
         println!("BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}", m.pressure, m.temperature, temp_f, m.humidity);
 
-        bme
+        Some(bme)
     };
 
-    Timer::after_millis(10).await;
 
     // ICM20948 example
-    let mut sensor_imu_i2c = {
+    let get_sensor_imu_i2c = async {
         let bus = I2cDevice::new(&shared_i2c_bus);
         match Icm20948::new_i2c(bus, Delay)
             .gyr_unit(GyrUnit::Dps)
@@ -139,8 +106,10 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-    let mut sensor_imu_spi = {
-        let bus = SpiDevice::new(&shared_spi_bus, cs_icm20948);
+    let get_sensor_imu_spi = async {
+        //let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
+        let cs_icm20948 = Output::new(p.PA3, Level::High, Speed::High);
+        let bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs_icm20948);
         match Icm20948::new_spi(bus, Delay)
             .gyr_unit(GyrUnit::Dps)
             .gyr_dlp(icm20948_async::GyrDlp::Hz24)
@@ -164,11 +133,9 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-    Timer::after_millis(10).await;
-
 
     // PWM servo example
-    {
+    let servo = async {
         // D6 / PB10 = TIM2CH3
         // D5 / PB4 = TIM3CH1
         // D3 / PB3 = TIM2CH2
@@ -196,34 +163,51 @@ async fn main(_spawner: Spawner) {
 
             Timer::after_millis(250).await;
 
-            if let Some(sens) = &mut sensor_imu_i2c {
-                let stuff = sens.read_9dof().await.unwrap();
-                println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-            }
+            //if let Some(sens) = &mut sensor_imu_spi {
+                //let stuff = sens.read_9dof().await.unwrap();
+                //println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+            //}
         }
     };
 
-    let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
-    loop {
-        // we use a pullup resistor, so the button is active low
-        while button.is_high() {
-            Timer::after_millis(10).await;
+    let button = async {
+        let cs = Output::new(p.PB6, Level::High, Speed::High);
+        let mut bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs);
+
+        let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
+        loop {
+            // we use a pullup resistor, so the button is active low
+            while button.is_high() {
+                Timer::after_millis(10).await;
+            }
+
+            println!("Button pressed!");
+            // Blink faster
+            SIGNAL_A.store(50, Ordering::SeqCst);
+            SIGNAL_B.store(50, Ordering::SeqCst);
+
+            while button.is_low() {
+                use embedded_hal_async::spi::SpiDevice;
+                bus.write(b"This is a really long string :D").await.unwrap();
+                Timer::after_millis(100).await;
+            }
+
+            println!("Button released!");
+            // Blink slower
+            SIGNAL_A.store(100, Ordering::SeqCst);
+            SIGNAL_B.store(900, Ordering::SeqCst);
         }
+    };
 
-        println!("Button pressed!");
-        // Blink faster
-        SIGNAL_A.store(50, Ordering::SeqCst);
-        SIGNAL_B.store(50, Ordering::SeqCst);
+    // Blinking LED example
+    //println!("Starting blinking program");
+    //_spawner.spawn(blink(p.PA5.degrade())).unwrap();
 
-        while button.is_low() {
-            //let acc = _sensor_imu.read_acc().await.unwrap();
-            //println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
-            Timer::after_millis(100).await;
-        }
+    //let bme = get_sensor_bme.await;
+    //let imu = get_sensor_imu_i2c.await;
+    //let imu_spi = get_sensor_imu_spi.await;
 
-        println!("Button released!");
-        // Blink slower
-        SIGNAL_A.store(100, Ordering::SeqCst);
-        SIGNAL_B.store(900, Ordering::SeqCst);
-    }
+    //Timer::after_millis(100).await;
+
+    button.await;
 }
