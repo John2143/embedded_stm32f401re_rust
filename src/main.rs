@@ -63,7 +63,9 @@ async fn main(_spawner: Spawner) {
     let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
     let shared_spi_bus = {
         let mut cfg = embassy_stm32::spi::Config::default();
-        cfg.frequency = Hertz::hz(50_000); // up to 7mhz
+        cfg.frequency = Hertz::hz(5_000_000); // up to 7mhz
+        cfg.bit_order = embassy_stm32::spi::BitOrder::MsbFirst;
+        cfg.mode = embassy_stm32::spi::MODE_0;
         let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
         Mutex::<NoopRawMutex, _>::new(spi)
     };
@@ -74,7 +76,8 @@ async fn main(_spawner: Spawner) {
         let mut bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, Output::new(p.PC7, Level::High, Speed::High));
 
         use embedded_hal_async::spi::SpiDevice;
-        bus.write(b"test").await.unwrap();
+        //bus.write(b"test").await.unwrap();
+        println!("Test written over bus");
 
         let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
         loop {
@@ -85,7 +88,7 @@ async fn main(_spawner: Spawner) {
             println!("Button pushed!");
 
             while button.is_low() {
-                bus.write(b"test").await.unwrap();
+                bus.write(&[1,3,8]).await.unwrap();
                 //let acc = _sensor_imu.read_acc().await.unwrap();
                 //println!("ICM20948: \n acc: {} {} {}", acc.x, acc.y, acc.z);
                 Timer::after_millis(100).await;
