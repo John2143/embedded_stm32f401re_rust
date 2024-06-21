@@ -7,10 +7,10 @@ use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3, join4};
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
+    bind_interrupts, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Instant, Timer};
 use icm20948_async::{AccRange, GyrUnit, Icm20948};
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -33,7 +33,7 @@ async fn blink(pin: AnyPin) {
     }
 }
 
-static SIGNAL_A: AtomicU32 = AtomicU32::new(100);
+static SIGNAL_A: AtomicU32 = AtomicU32::new(5);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
@@ -48,7 +48,9 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
     let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
+
     let led_in = Input::new(p.PA9, Pull::None);
+    let mut led_in = ExtiInput::new(led_in, p.EXTI9);
     // Internally, the led has a pullup resistor
 
     let shared_i2c_bus = {
@@ -184,9 +186,9 @@ async fn main(_spawner: Spawner) {
 
 
         loop {
-            //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
-            //let data = !data;
             if SIGNAL_A.load(Ordering::SeqCst) > 0{
+                println!("Sending IR signal");
+                SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
                 join(
                     set1(&mut pwm),
                     Timer::after_millis(8)
@@ -196,8 +198,10 @@ async fn main(_spawner: Spawner) {
                     Timer::after_micros(4_500)
                 ).await;
 
-                for _ in 0..10 {
-                    let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
+                for _ in 0..1 {
+                    let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
+                    let data = !data;
+                    //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
                     let range = if data < 0x0001_0000 { 16 } else { 32 };
                     for i in (0..range).rev() {
                         let bit = (data >> i) & 1;
@@ -211,9 +215,9 @@ async fn main(_spawner: Spawner) {
                     send0(&mut pwm).await;
                     Timer::after_millis(20).await;
                 }
-            }
 
-            Timer::after_millis(100).await;
+                Timer::after_millis(1000).await;
+            }
         }
     };
 
@@ -241,30 +245,53 @@ async fn main(_spawner: Spawner) {
         }
     };
 
+
+    const SIZE: usize = 1024;
+    type MEM = [u32; SIZE];
+    static mut MEM_READ: &'static [u32] = &[];
     let get_led = async {
+        static mut MEM_A: MEM = [0; SIZE];
+        static mut MEM_B: MEM = [0; SIZE];
+        let mut MEM_WRITE: *mut _ = unsafe { MEM_A.as_mut_ptr() };
+        let mut cur_indx = 0;
+
         loop {
-            let mut ticks_h = 0;
-            while led_in.is_high() {
-                ticks_h += 1;
-                Timer::after_micros(10).await;
-            };
+            led_in.wait_for_falling_edge().await;
+            let t1 = Instant::now();
+            led_in.wait_for_high().await;
+            let diff = Instant::now() - t1;
 
-            let mut ticks_l = 0;
-            while led_in.is_low() {
-                ticks_l += 1;
-                Timer::after_micros(10).await;
-            };
+            // we just read from the other thread, swap the ptrs now
+            if SIGNAL_B.fetch_add(1, Ordering::SeqCst) == 0 {
+                unsafe {
+                    if MEM_WRITE as *const _ == MEM_A.as_ptr() {
+                        println!("swapped a");
+                        MEM_READ = &MEM_A[0..cur_indx];
+                        MEM_WRITE = MEM_B.as_mut_ptr();
+                    } else {
+                        println!("swapped b");
+                        MEM_READ = &MEM_B[0..cur_indx];
+                        MEM_WRITE = MEM_A.as_mut_ptr();
+                    }
+                }
+            }
 
-            SIGNAL_B.store(ticks_h, Ordering::SeqCst);
-            SIGNAL_C.store(ticks_l, Ordering::SeqCst);
+            let ticks = diff.as_micros() as u32;
+            unsafe {
+                if cur_indx < SIZE {
+                    MEM_WRITE.add(cur_indx).write(ticks);
+                    cur_indx += 1;
+                }
+            }
+
         }
     };
 
     let prints = async {
         loop {
-            let ticks_h = SIGNAL_B.load(Ordering::SeqCst);
-            let ticks_l = SIGNAL_C.load(Ordering::SeqCst);
-            println!("stayed h/l for {}0/{}0us", ticks_h, ticks_l);
+            let read = unsafe { MEM_READ };
+            println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
+            let ticks_h = SIGNAL_B.swap(0, Ordering::SeqCst);
             Timer::after_millis(1000).await;
         }
     };
