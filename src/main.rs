@@ -5,7 +5,7 @@ use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3, join4};
+use embassy_futures::{join::{join, join3, join4}, select::{select, Either}};
 use embassy_stm32::{
     bind_interrupts, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
 };
@@ -266,14 +266,33 @@ async fn main(_spawner: Spawner) {
         }
     };
 
+
+    const TIMEOUT_MICROS: u64 = 22_000;
     let prints = async {
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut buf = [(0, 0); 1024];
-            for i in 0..1024 {
-                buf[i] = rx.receive().await;
-            }
-            println!("ticks: {} {}", buf.len(), buf.get(0..100));
+            let mut i = 0;
+            let final_buf = loop {
+                if i == 1024 {
+                    // buffer full
+                    break &buf[0..1024];
+                }
+                match select(rx.receive(), Timer::after_micros(TIMEOUT_MICROS)).await {
+                    // We got a IR packet
+                    Either::First(a) => {
+                        buf[i] = a;
+                        i += 1;
+                    }
+                    // Timeout
+                    Either::Second(_) => {
+                        if i > 0 {
+                            break &buf[0..i];
+                        }
+                    }
+                }
+            };
+            println!("ticks: {} {}", final_buf.len(), final_buf.get(0..100));
             Timer::after_millis(10).await;
         }
     };
