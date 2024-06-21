@@ -4,7 +4,7 @@
 use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_executor::{Executor, InterruptExecutor};
+use embassy_executor::InterruptExecutor;
 use embassy_futures::{
     join::{join, join3},
     select::{select, Either},
@@ -14,6 +14,7 @@ use embassy_stm32::{
     exti::ExtiInput,
     gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
     i2c,
+    interrupt::{self, InterruptExt},
     peripherals::{
         self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
         PB8, PB9, PC13, SPI1, TIM1,
@@ -54,7 +55,7 @@ type MUTEX = CriticalSectionRawMutex;
 
 static SIGNAL_A: AtomicU32 = AtomicU32::new(1);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
-static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
+//static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
 bind_interrupts!(struct Irqs {
     //USB => usb::InterruptHandler<peripherals::USB>;
@@ -63,8 +64,7 @@ bind_interrupts!(struct Irqs {
 });
 
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
-static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
-static mut EXECUTOR_NORMAL: StaticCell<embassy_executor::Executor> = StaticCell::new();
+static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
 static IR_CHANNEL: StaticCell<IrChannel> = StaticCell::new();
 
 #[cortex_m_rt::entry]
@@ -81,7 +81,11 @@ fn main() -> ! {
         tx,
     };
 
-    let spawner = EXECUTOR_HIGH.start(stm32_metapac::interrupt::EXTI2);
+    let chan = embassy_stm32::pac::interrupt::EXTI2;
+    chan.set_priority(embassy_stm32::interrupt::Priority::P5);
+    unsafe { chan.enable() };
+    drop(p.EXTI2);
+    let spawner = EXECUTOR_HIGH.start(chan);
     spawner.spawn(ir(ir_input)).unwrap();
 
     let main_input = InputMainLoop {
@@ -107,11 +111,21 @@ fn main() -> ! {
         rx,
     };
 
-    unsafe {
-        EXECUTOR_NORMAL.init(Executor::new()).run(move |spawner| {
-            spawner.spawn(main2(main_input)).unwrap();
-        });
-    };
+    let chan = stm32_metapac::interrupt::EXTI3;
+    chan.set_priority(embassy_stm32::interrupt::Priority::P8);
+    unsafe { chan.enable() };
+    drop(p.EXTI3);
+    let spawner = EXECUTOR_NORMAL.start(chan);
+    spawner.spawn(main2(main_input)).unwrap();
+
+    let mut i = 0u32;
+    loop {
+        i += 1;
+        if i % 100 == 0 {
+            println!("main loop {}", i);
+        }
+        cortex_m::asm::wfi();
+    }
 }
 
 type IrType = (Duration, Duration);
