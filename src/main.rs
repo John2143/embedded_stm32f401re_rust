@@ -2,17 +2,10 @@
 #![no_main]
 
 use embassy_stm32::{
-    bind_interrupts,
-    exti::ExtiInput,
-    gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
-    i2c,
     peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
+        DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
         PB8, PB9, PC13, SPI1, TIM1,
-    },
-    time::Hertz,
-    timer::simple_pwm::{PwmPin, SimplePwm},
-    Peripheral, PeripheralRef,
+    }, PeripheralRef,
 };
 
 use defmt_rtt as _;
@@ -57,24 +50,12 @@ struct InputIRLoop {
     //tx: Sender<'static, MUTEX, IrType, IR_COUNT>,
 }
 
-#[rtic::app(device = crate::pac, peripherals = false, dispatchers = [])]
+#[rtic::app(device = crate::pac, peripherals = false, dispatchers = [EXTI2, EXTI3])]
 mod app {
     use defmt::println;
     use super::{InputMainLoop, InputIRLoop};
 
-    use embassy_stm32::{
-        bind_interrupts,
-        exti::ExtiInput,
-        gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
-        i2c,
-        peripherals::{
-            self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
-            PB8, PB9, PC13, SPI1, TIM1,
-        },
-        time::Hertz,
-        timer::simple_pwm::{PwmPin, SimplePwm},
-        Peripheral, PeripheralRef,
-    };
+    use embassy_stm32::Peripheral;
 
     #[shared]
     struct Shared {
@@ -124,8 +105,12 @@ mod app {
         })
     }
 
-    #[task()]
-    async fn foo(cx: foo::Context) {
+    #[task(local = [input_main_loop], priority = 5)]
+    async fn main_loop(cx: main_loop::Context) {
+    }
+
+    #[task(local = [input_ir_loop], priority = 2)]
+    async fn ir_loop(cx: ir_loop::Context) {
     }
 }
 
