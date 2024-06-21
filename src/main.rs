@@ -245,7 +245,7 @@ async fn main(_spawner: Spawner) {
     };
 
 
-    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 10>::new();
+    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 1000>::new();
     let rx = timing_channel.receiver();
     let tx = timing_channel.sender();
 
@@ -291,8 +291,7 @@ async fn main(_spawner: Spawner) {
                         if i > 0 {
                             break &buf[0..i];
                         } else {
-                            println!("Timeout");
-                            Timer::after_millis(1000).await;
+                            Timer::after_millis(250).await;
                         }
                     }
                 }
