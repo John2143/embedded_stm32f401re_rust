@@ -246,7 +246,7 @@ async fn main(_spawner: Spawner) {
     };
 
 
-    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 1024>::new();
+    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 10>::new();
     let rx = timing_channel.receiver();
     let tx = timing_channel.sender();
 
@@ -255,14 +255,14 @@ async fn main(_spawner: Spawner) {
         loop {
             led_in.wait_for_falling_edge().await;
             let t1 = Instant::now();
+            let time_high = t1 - t2;
             led_in.wait_for_high().await;
-            let diff1 = t1 - t2;
             t2 = Instant::now();
-            let diff2 = t2 - t1;
+            let time_low = t2 - t1;
 
-            let ticks1 = diff1.as_micros() as u32;
-            let ticks2 = diff2.as_micros() as u32;
-            let _ = tx.try_send((ticks1, ticks2));
+            let micros_high = time_high.as_micros() as u32;
+            let micros_low = time_low.as_micros() as u32;
+            let _ = tx.try_send((micros_high, micros_low));
         }
     };
 
@@ -274,7 +274,7 @@ async fn main(_spawner: Spawner) {
                 buf[i] = rx.receive().await;
             }
             println!("ticks: {} {}", buf.len(), buf.get(0..100));
-            Timer::after_millis(100).await;
+            Timer::after_millis(10).await;
         }
     };
 
