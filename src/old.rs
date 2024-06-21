@@ -68,7 +68,6 @@ static IR_CHANNEL: StaticCell<IrChannel> = StaticCell::new();
 #[cortex_m_rt::entry]
 fn main() -> ! {
 
-    return;
     let p = embassy_stm32::init(Default::default());
 
     let timing_channel = IR_CHANNEL.init(IrChannel::new());
@@ -151,28 +150,6 @@ async fn ir(ins: InputIRLoop) {
 }
 
 struct InputMainLoop {
-    cs_spi1: PeripheralRef<'static, PB6>,
-
-    i2c_channel: PeripheralRef<'static, I2C1>,
-    i2c_sda: PeripheralRef<'static, PB9>,
-    i2c_scl: PeripheralRef<'static, PB8>,
-    i2c_dma_tx: PeripheralRef<'static, DMA1_CH7>,
-    i2c_dma_rx: PeripheralRef<'static, DMA1_CH5>,
-
-    // let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
-    spi_channel: PeripheralRef<'static, SPI1>,
-    spi_sck: PeripheralRef<'static, PB3>,
-    spi_mosi: PeripheralRef<'static, PA7>,
-    spi_miso: PeripheralRef<'static, PA6>,
-    spi_dma_tx: PeripheralRef<'static, DMA2_CH3>,
-    spi_dma_rx: PeripheralRef<'static, DMA2_CH0>,
-
-    ir_output_timer: PeripheralRef<'static, TIM1>,
-    ir_output_pin: PeripheralRef<'static, PA8>,
-
-    button: PeripheralRef<'static, PC13>,
-
-    rx: Receiver<'static, MUTEX, IrType, IR_COUNT>,
 }
 
 #[embassy_executor::task]
