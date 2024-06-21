@@ -2,18 +2,41 @@
 #![no_main]
 
 use bme280::i2c::AsyncBME280;
-use defmt::println;
-use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
-use embassy_executor::Spawner;
-use embassy_futures::{join::{join, join3, join4}, select::{select, Either}};
-use embassy_stm32::{
-    bind_interrupts, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
+use cortex_m::{
+    interrupt::{Mutex, Nr},
+    Peripherals,
 };
-use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
-use embassy_time::{Delay, Instant, Timer};
+use defmt::println;
+use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
+use embassy_executor::{Executor, InterruptExecutor, Spawner};
+use embassy_futures::{
+    join::{join, join3, join4},
+    select::{select, Either},
+};
+use embassy_stm32::{
+    bind_interrupts,
+    exti::ExtiInput,
+    gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
+    i2c,
+    peripherals::{
+        self, DMA1_CH2, DMA1_CH3, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB13, PB3, PB6, PB8, PB9, PC13, SPI1, TIM1
+    },
+    time::Hertz,
+    timer::simple_pwm::{PwmPin, SimplePwm},
+    Peripheral, PeripheralRef,
+};
+use embassy_sync::{
+    blocking_mutex::{raw::CriticalSectionRawMutex, CriticalSectionMutex},
+    channel::{Receiver, Sender},
+};
+use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948_async::{AccRange, GyrUnit, Icm20948};
+use static_cell::StaticCell;
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -33,7 +56,9 @@ async fn blink(pin: AnyPin) {
     }
 }
 
-static SIGNAL_A: AtomicU32 = AtomicU32::new(5);
+type MUTEX = CriticalSectionRawMutex;
+
+static SIGNAL_A: AtomicU32 = AtomicU32::new(1);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
@@ -43,14 +68,110 @@ bind_interrupts!(struct Irqs {
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
 
-// Main is itself an async task as well.
-#[embassy_executor::main]
-async fn main(_spawner: Spawner) {
-    let p = embassy_stm32::init(Default::default());
-    let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
+static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
+static EXECUTOR_MED: InterruptExecutor = InterruptExecutor::new();
+static mut EXECUTOR_NORMAL: StaticCell<embassy_executor::Executor> = StaticCell::new();
+static IR_CHANNEL: StaticCell<IrChannel> = StaticCell::new();
 
-    let led_in = Input::new(p.PA9, Pull::None);
-    let mut led_in = ExtiInput::new(led_in, p.EXTI9);
+#[cortex_m_rt::entry]
+fn main() -> ! {
+    let p = embassy_stm32::init(Default::default());
+
+    let timing_channel = IR_CHANNEL.init(IrChannel::new());
+    let rx = timing_channel.receiver();
+    let tx = timing_channel.sender();
+
+    let ir_input = InputIRLoop {
+        pin: p.PA9.into_ref(),
+        exti: p.EXTI9.into_ref(),
+        tx,
+    };
+
+    let spawner = EXECUTOR_HIGH.start(stm32_metapac::interrupt::EXTI2);
+    spawner.spawn(ir(ir_input)).unwrap();
+
+    let main_input = InputMainLoop {
+        cs_spi1: p.PB6.into_ref(),
+
+        i2c_channel: p.I2C1.into_ref(),
+        i2c_sda: p.PB9.into_ref(),
+        i2c_scl: p.PB8.into_ref(),
+        i2c_dma_rx: p.DMA1_CH7.into_ref(),
+        i2c_dma_tx: p.DMA1_CH5.into_ref(),
+
+        spi_channel: p.SPI1.into_ref(),
+        spi_sck: p.PB3.into_ref(),
+        spi_mosi: p.PA7.into_ref(),
+        spi_miso: p.PA6.into_ref(),
+        spi_dma_tx: p.DMA2_CH3.into_ref(),
+        spi_dma_rx: p.DMA2_CH0.into_ref(),
+
+        rx,
+    };
+
+    unsafe {
+        EXECUTOR_NORMAL.init(Executor::new()).run(move |spawner| {
+            spawner.spawn(main2(p)).unwrap();
+        });
+    };
+}
+
+type IrType = (Duration, Duration);
+const IR_COUNT: usize = 100;
+type IrChannel = embassy_sync::channel::Channel<MUTEX, IrType, IR_COUNT>;
+
+struct InputIRLoop {
+    pin: PeripheralRef<'static, PA9>,
+    exti: PeripheralRef<'static, EXTI9>,
+    tx: Sender<'static, MUTEX, IrType, IR_COUNT>,
+}
+
+#[embassy_executor::task]
+async fn ir(ins: InputIRLoop) {
+    let led_in = Input::new(ins.pin, Pull::None);
+    let mut led_in = ExtiInput::new(led_in, ins.exti);
+
+    let mut t2 = Instant::now();
+    loop {
+        led_in.wait_for_low().await;
+        let t1 = Instant::now();
+        let time_high = t1 - t2;
+        led_in.wait_for_high().await;
+        t2 = Instant::now();
+        let time_low = t2 - t1;
+
+        let _ = ins.tx.try_send((time_high, time_low));
+    }
+}
+
+struct InputMainLoop {
+    cs_spi1: PeripheralRef<'static, PB6>,
+
+    i2c_channel: PeripheralRef<'static, I2C1>,
+    i2c_sda: PeripheralRef<'static, PB9>,
+    i2c_scl: PeripheralRef<'static, PB8>,
+    i2c_dma_rx: PeripheralRef<'static, DMA1_CH7>,
+    i2c_dma_tx: PeripheralRef<'static, DMA1_CH5>,
+
+    // let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
+    spi_channel: PeripheralRef<'static, SPI1>,
+    spi_sck: PeripheralRef<'static, PB3>,
+    spi_mosi: PeripheralRef<'static, PA7>,
+    spi_miso: PeripheralRef<'static, PA6>,
+    spi_dma_tx: PeripheralRef<'static, DMA2_CH3>,
+    spi_dma_rx: PeripheralRef<'static, DMA2_CH0>,
+
+    ir_output_timer: PeripheralRef<'static, TIM1>,
+    ir_output_pin: PeripheralRef<'static, PA8>,
+
+    button: PeripheralRef<'static, PC13>,
+
+    rx: Receiver<'static, MUTEX, IrType, IR_COUNT>,
+}
+
+#[embassy_executor::task]
+async fn main2(ins: InputMainLoop) {
+    let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
     // Internally, the led has a pullup resistor
 
     let shared_i2c_bus = {
@@ -59,8 +180,17 @@ async fn main(_spawner: Spawner) {
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
 
-        let i2c = embassy_stm32::i2c::I2c::new(p.I2C1, p.PB8, p.PB9, Irqs, p.DMA1_CH7, p.DMA1_CH5, spd, cfg);
-        Mutex::<NoopRawMutex, _>::new(i2c)
+        let i2c = embassy_stm32::i2c::I2c::new(
+            ins.i2c_channel,
+            ins.i2c_scl,
+            ins.i2c_sda,
+            Irqs,
+            ins.i2c_dma_tx,
+            ins.i2c_dma_rx,
+            spd,
+            cfg,
+        );
+        embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(i2c)
     };
 
     let shared_spi_bus = {
@@ -68,14 +198,17 @@ async fn main(_spawner: Spawner) {
         cfg.frequency = Hertz::hz(1_000_000); // up to 7mhz
         cfg.bit_order = embassy_stm32::spi::BitOrder::MsbFirst;
         cfg.mode = embassy_stm32::spi::MODE_0;
-        let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
-        Mutex::<NoopRawMutex, _>::new(spi)
+        let spi = embassy_stm32::spi::Spi::new(
+            ins.spi_channel,
+            ins.spi_sck,
+            ins.spi_mosi,
+            ins.spi_miso,
+            ins.spi_dma_tx,
+            ins.spi_dma_tx,
+            cfg,
+        );
+        embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
     };
-
-    // We need to write something to the bus so is it left high (mode0)
-    shared_spi_bus.lock().await.write(&[0u8]).await.unwrap();
-    Timer::after_millis(1).await;
-    shared_spi_bus.lock().await.write(&[2u8, 1, 4, 3]).await.unwrap();
 
     // BME280 example
     let get_sensor_bme = async {
@@ -89,11 +222,13 @@ async fn main(_spawner: Spawner) {
 
         let m = bme.measure(&mut Delay).await.unwrap();
         let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
-        println!("BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}", m.pressure, m.temperature, temp_f, m.humidity);
+        println!(
+            "BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}",
+            m.pressure, m.temperature, temp_f, m.humidity
+        );
 
         Some(bme)
     };
-
 
     // ICM20948 example
     let get_sensor_imu_i2c = async {
@@ -104,45 +239,61 @@ async fn main(_spawner: Spawner) {
             .acc_range(AccRange::Gs8)
             .set_address(0x69)
             .initialize_9dof()
-            .await {
-                Ok(mut icm) => {
-                    let stuff = icm.read_9dof().await.unwrap();
-                    println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-                    Some(icm)
-                },
-                Err(_) => {
-                    println!("ICM20948 i2c init failed!");
-                    None
-                }
+            .await
+        {
+            Ok(mut icm) => {
+                let stuff = icm.read_9dof().await.unwrap();
+                println!(
+                    "ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}",
+                    stuff.acc.x,
+                    stuff.acc.y,
+                    stuff.acc.z,
+                    stuff.gyr.x,
+                    stuff.gyr.y,
+                    stuff.gyr.z,
+                    stuff.mag.x,
+                    stuff.mag.y,
+                    stuff.mag.z
+                );
+                Some(icm)
+            }
+            Err(_) => {
+                println!("ICM20948 i2c init failed!");
+                None
+            }
         }
     };
 
     //let cs_icm20948 = Output::new(p.PA3, Level::High, Speed::High);
-    let imu_bus = embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs_icm20948);
+    let imu_bus =
+        embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs_icm20948);
     let get_sensor_imu_spi = async {
         match Icm20948::new_spi(imu_bus, Delay)
             .gyr_unit(GyrUnit::Dps)
             .gyr_dlp(icm20948_async::GyrDlp::Hz24)
             .acc_range(AccRange::Gs8)
             .initialize_6dof()
-            .await {
-                Ok(mut icm) => {
-                    let stuff = icm.read_6dof().await.unwrap();
-                    println!("ICM20948 spi: \n acc: {} {} {}\n gyr: {} {} {}\n", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z); //, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-                    Some(icm)
-                },
-                Err(e) => {
-                    println!("ICM20948 spi init failed:");
-                    match e {
-                        icm20948_async::IcmError::BusError(_e) => println!("Bus error"),
-                        icm20948_async::IcmError::ImuSetupError => println!("IMU setup error"),
-                        icm20948_async::IcmError::MagSetupError => println!("MAG setup error"),
-                    };
-                    None
-                }
+            .await
+        {
+            Ok(mut icm) => {
+                let stuff = icm.read_6dof().await.unwrap();
+                println!(
+                    "ICM20948 spi: \n acc: {} {} {}\n gyr: {} {} {}\n",
+                    stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z
+                ); //, stuff.mag.x, stuff.mag.y, stuff.mag.z);
+                Some(icm)
+            }
+            Err(e) => {
+                println!("ICM20948 spi init failed:");
+                match e {
+                    icm20948_async::IcmError::BusError(_e) => println!("Bus error"),
+                    icm20948_async::IcmError::ImuSetupError => println!("IMU setup error"),
+                    icm20948_async::IcmError::MagSetupError => println!("MAG setup error"),
+                };
+                None
+            }
         }
     };
-
 
     // PWM servo example
     let servo = async {
@@ -151,10 +302,21 @@ async fn main(_spawner: Spawner) {
         // D3 / PB3 = TIM2CH2
         //
         // D7 / PA8 = TIM1CH1
-        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(p.TIM1, Some(PwmPin::new_ch1(p.PA8, embassy_stm32::gpio::OutputType::PushPull)), None, None, None, Hertz::khz(38), embassy_stm32::timer::CountingMode::EdgeAlignedUp);
+        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
+            ins.ir_output_timer,
+            Some(PwmPin::new_ch1(
+                ins.ir_output_pin,
+                embassy_stm32::gpio::OutputType::PushPull,
+            )),
+            None,
+            None,
+            None,
+            Hertz::khz(38),
+            embassy_stm32::timer::CountingMode::EdgeAlignedUp,
+        );
 
         let max = pwm.get_max_duty();
-        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max/2);
+        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
         pwm.enable(embassy_stm32::timer::Channel::Ch1);
 
         async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
@@ -163,7 +325,7 @@ async fn main(_spawner: Spawner) {
 
         async fn set1(pwm: &mut SimplePwm<'_, TIM1>) {
             let max = pwm.get_max_duty();
-            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max/2);
+            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
         }
 
         const INSTR_TIME: i64 = 60_000;
@@ -184,18 +346,11 @@ async fn main(_spawner: Spawner) {
             Timer::after_nanos(B).await;
         }
 
-
         loop {
-            if SIGNAL_A.load(Ordering::SeqCst) > 0{
+            if SIGNAL_A.load(Ordering::SeqCst) > 0 {
                 SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
-                join(
-                    set1(&mut pwm),
-                    Timer::after_millis(8)
-                ).await;
-                join(
-                    set0(&mut pwm),
-                    Timer::after_micros(4_500)
-                ).await;
+                join(set1(&mut pwm), Timer::after_millis(8)).await;
+                join(set0(&mut pwm), Timer::after_micros(4_500)).await;
 
                 for _ in 0..1 {
                     //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
@@ -221,8 +376,7 @@ async fn main(_spawner: Spawner) {
     };
 
     let button = async {
-
-        let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
+        let button = embassy_stm32::gpio::Input::new(ins.button, Pull::Up);
         loop {
             // we use a pullup resistor, so the button is active low
             while button.is_high() {
@@ -244,28 +398,6 @@ async fn main(_spawner: Spawner) {
         }
     };
 
-
-    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 1000>::new();
-    let rx = timing_channel.receiver();
-    let tx = timing_channel.sender();
-
-    let get_led = async {
-        let mut t2 = Instant::now();
-        loop {
-            led_in.wait_for_low().await;
-            let t1 = Instant::now();
-            let time_high = t1 - t2;
-            led_in.wait_for_high().await;
-            t2 = Instant::now();
-            let time_low = t2 - t1;
-
-            let micros_high = time_high.as_ticks() as u32;
-            let micros_low = time_low.as_ticks() as u32;
-            let _ = tx.try_send((micros_high, micros_low));
-        }
-    };
-
-
     let prints = async {
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
@@ -277,13 +409,13 @@ async fn main(_spawner: Spawner) {
                     // buffer full
                     break &buf[0..1024];
                 }
-                match select(rx.receive(), Timer::after_millis(25)).await {
+                match select(ins.rx.receive(), Timer::after_millis(10)).await {
                     // We got a IR packet
                     Either::First(a) => {
                         if i == 1 {
                             start = Instant::now();
                         }
-                        buf[i] = a;
+                        buf[i] = (a.0.as_micros() as u32, a.1.as_micros() as u32);
                         i += 1;
                     }
                     // Timeout
@@ -312,7 +444,7 @@ async fn main(_spawner: Spawner) {
 
     //Timer::after_millis(100).await;
 
-    join4(button, servo, get_led, prints).await;
+    join4(button, servo, prints).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
