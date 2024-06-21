@@ -7,7 +7,7 @@ use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self}, time::Hertz, timer::simple_pwm::PwmPin
+    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Timer};
@@ -146,68 +146,95 @@ async fn main(_spawner: Spawner) {
         // D3 / PB3 = TIM2CH2
         //
         // D7 / PA8 = TIM1CH1
-        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(p.TIM1, Some(PwmPin::new_ch1(p.PA8, embassy_stm32::gpio::OutputType::PushPull)), None, None, None, Hertz::hz(50), embassy_stm32::timer::CountingMode::EdgeAlignedUp);
+        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(p.TIM1, Some(PwmPin::new_ch1(p.PA8, embassy_stm32::gpio::OutputType::PushPull)), None, None, None, Hertz::khz(38), embassy_stm32::timer::CountingMode::EdgeAlignedUp);
 
         let max = pwm.get_max_duty();
-        let lowest = max / 25; // 800us at 50Hz
-        let highest = max / 10; // 2ms at 50Hz
-
-        let target_percent = 0.25;
-        // lerp between lowest and highest based on target_percent
-        let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
-
-        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
+        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max/2);
         pwm.enable(embassy_stm32::timer::Channel::Ch1);
 
-        for i in 0..10 {
-            let target_percent = i as f32 / 10.0;
-            // lerp between lowest and highest based on target_percent
-            let target = lowest + ((highest - lowest) as f32 * target_percent) as u16;
+        async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
+            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
+        }
 
-            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, target);
+        async fn set1(pwm: &mut SimplePwm<'_, TIM1>) {
+            let max = pwm.get_max_duty();
+            pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max/2);
+        }
 
-            Timer::after_millis(250).await;
+        const INSTR_TIME: i64 = 60_000;
+        const A: u64 = (562_500i64 - INSTR_TIME) as u64;
+        const B: u64 = (1_687_500i64 - INSTR_TIME * 3) as u64;
 
-            //if let Some(sens) = &mut sensor_imu_spi {
-                //let stuff = sens.read_9dof().await.unwrap();
-                //println!("ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-            //}
+        async fn send0(pwm: &mut SimplePwm<'_, TIM1>) {
+            set1(pwm).await;
+            Timer::after_nanos(A).await;
+            set0(pwm).await;
+            Timer::after_nanos(A).await;
+        }
+
+        async fn send1(pwm: &mut SimplePwm<'_, TIM1>) {
+            set1(pwm).await;
+            Timer::after_nanos(A).await;
+            set0(pwm).await;
+            Timer::after_nanos(B).await;
+        }
+
+
+        loop {
+            //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
+            //let data = !data;
+            if SIGNAL_A.load(Ordering::SeqCst) > 0{
+                join(
+                    set1(&mut pwm),
+                    Timer::after_millis(8)
+                ).await;
+                join(
+                    set0(&mut pwm),
+                    Timer::after_micros(4_500)
+                ).await;
+
+                for _ in 0..10 {
+                    let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
+                    let range = if data < 0x0001_0000 { 16 } else { 32 };
+                    for i in (0..range).rev() {
+                        let bit = (data >> i) & 1;
+                        if bit == 1 {
+                            send1(&mut pwm).await;
+                        } else {
+                            send0(&mut pwm).await;
+                        }
+                    }
+
+                    send0(&mut pwm).await;
+                    Timer::after_millis(20).await;
+                }
+            }
+
+            Timer::after_millis(100).await;
         }
     };
 
     let button = async {
-        // we use a pullup resistor, so the button is active low
+
         let button = embassy_stm32::gpio::Input::new(p.PC13, Pull::Up);
-        while button.is_high() {
-            Timer::after_millis(10).await;
-        }
-        println!("Button pressed: Setting up sensor!");
-
-        let Some(mut sens) = get_sensor_imu_spi.await else {
-            return;
-        };
-
         loop {
-            // Blink faster
-            //SIGNAL_A.store(50, Ordering::SeqCst);
-            //SIGNAL_B.store(50, Ordering::SeqCst);
-
-            while button.is_low() {
-                let stuff = sens.read_6dof().await.unwrap();
-                println!("ICM20948 spi: \n acc: {} {} {}\n gyr: {} {} {}\n", stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z); //, stuff.mag.x, stuff.mag.y, stuff.mag.z);
-                Timer::after_millis(100).await;
-            }
-
-            println!("Button released!");
-            // Blink slower
-            //SIGNAL_A.store(100, Ordering::SeqCst);
-            //SIGNAL_B.store(900, Ordering::SeqCst);
-
+            // we use a pullup resistor, so the button is active low
             while button.is_high() {
                 Timer::after_millis(10).await;
             }
-
             println!("Button pressed!");
+
+            if SIGNAL_A.load(Ordering::SeqCst) > 0 {
+                SIGNAL_A.store(0, Ordering::SeqCst);
+            } else {
+                SIGNAL_A.store(100, Ordering::SeqCst);
+            }
+
+            while button.is_low() {
+                Timer::after_millis(10).await;
+            }
+
+            println!("Button released!");
         }
     };
 
@@ -221,6 +248,7 @@ async fn main(_spawner: Spawner) {
 
     //Timer::after_millis(100).await;
 
-    //join(button, servo).await;
-    let ptr = shared_spi_bus.lock().await;
+    join(button, servo).await;
+    //servo.await;
+    //let ptr = shared_spi_bus.lock().await;
 }
