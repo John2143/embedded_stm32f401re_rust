@@ -198,7 +198,7 @@ async fn main(_spawner: Spawner) {
                     Timer::after_micros(4_500)
                 ).await;
 
-                for _ in 0..1 {
+                for _ in 0..10 {
                     let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
                     let data = !data;
                     //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
@@ -246,53 +246,35 @@ async fn main(_spawner: Spawner) {
     };
 
 
-    const SIZE: usize = 1024;
-    type MEM = [u32; SIZE];
-    static mut MEM_READ: &'static [u32] = &[];
-    let get_led = async {
-        static mut MEM_A: MEM = [0; SIZE];
-        static mut MEM_B: MEM = [0; SIZE];
-        let mut MEM_WRITE: *mut _ = unsafe { MEM_A.as_mut_ptr() };
-        let mut cur_indx = 0;
+    let timing_channel = embassy_sync::channel::Channel::<NoopRawMutex, (u32, u32), 1024>::new();
+    let rx = timing_channel.receiver();
+    let tx = timing_channel.sender();
 
+    let get_led = async {
+        let mut t2 = Instant::now();
         loop {
             led_in.wait_for_falling_edge().await;
             let t1 = Instant::now();
             led_in.wait_for_high().await;
-            let diff = Instant::now() - t1;
+            let diff1 = t1 - t2;
+            t2 = Instant::now();
+            let diff2 = t2 - t1;
 
-            // we just read from the other thread, swap the ptrs now
-            if SIGNAL_B.fetch_add(1, Ordering::SeqCst) == 0 {
-                unsafe {
-                    if MEM_WRITE as *const _ == MEM_A.as_ptr() {
-                        println!("swapped a");
-                        MEM_READ = &MEM_A[0..cur_indx];
-                        MEM_WRITE = MEM_B.as_mut_ptr();
-                    } else {
-                        println!("swapped b");
-                        MEM_READ = &MEM_B[0..cur_indx];
-                        MEM_WRITE = MEM_A.as_mut_ptr();
-                    }
-                }
-            }
-
-            let ticks = diff.as_micros() as u32;
-            unsafe {
-                if cur_indx < SIZE {
-                    MEM_WRITE.add(cur_indx).write(ticks);
-                    cur_indx += 1;
-                }
-            }
-
+            let ticks1 = diff1.as_micros() as u32;
+            let ticks2 = diff2.as_micros() as u32;
+            let _ = tx.try_send((ticks1, ticks2));
         }
     };
 
     let prints = async {
         loop {
-            let read = unsafe { MEM_READ };
-            println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
-            let ticks_h = SIGNAL_B.swap(0, Ordering::SeqCst);
-            Timer::after_millis(1000).await;
+            //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
+            let mut buf = [(0, 0); 1024];
+            for i in 0..1024 {
+                buf[i] = rx.receive().await;
+            }
+            println!("ticks: {} {}", buf.len(), buf.get(0..100));
+            Timer::after_millis(100).await;
         }
     };
 
