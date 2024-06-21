@@ -5,9 +5,9 @@ use bme280::i2c::AsyncBME280;
 use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::{i2c::I2cDevice};
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::join::{join, join3, join4};
 use embassy_stm32::{
-    bind_interrupts, gpio::{AnyPin, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
+    bind_interrupts, gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed}, i2c, peripherals::{self, TIM1}, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}
 };
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, mutex::Mutex};
 use embassy_time::{Delay, Timer};
@@ -35,6 +35,7 @@ async fn blink(pin: AnyPin) {
 
 static SIGNAL_A: AtomicU32 = AtomicU32::new(100);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
+static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
 bind_interrupts!(struct Irqs {
     //USB => usb::InterruptHandler<peripherals::USB>;
@@ -47,6 +48,8 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
     let cs_icm20948 = Output::new(p.PB6, Level::High, Speed::High);
+    let led_in = Input::new(p.PA9, Pull::None);
+    // Internally, the led has a pullup resistor
 
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
@@ -238,6 +241,34 @@ async fn main(_spawner: Spawner) {
         }
     };
 
+    let get_led = async {
+        loop {
+            let mut ticks_h = 0;
+            while led_in.is_high() {
+                ticks_h += 1;
+                Timer::after_micros(10).await;
+            };
+
+            let mut ticks_l = 0;
+            while led_in.is_low() {
+                ticks_l += 1;
+                Timer::after_micros(10).await;
+            };
+
+            SIGNAL_B.store(ticks_h, Ordering::SeqCst);
+            SIGNAL_C.store(ticks_l, Ordering::SeqCst);
+        }
+    };
+
+    let prints = async {
+        loop {
+            let ticks_h = SIGNAL_B.load(Ordering::SeqCst);
+            let ticks_l = SIGNAL_C.load(Ordering::SeqCst);
+            println!("stayed h/l for {}0/{}0us", ticks_h, ticks_l);
+            Timer::after_millis(1000).await;
+        }
+    };
+
     // Blinking LED example
     //println!("Starting blinking program");
     //_spawner.spawn(blink(p.PA5.degrade())).unwrap();
@@ -248,7 +279,7 @@ async fn main(_spawner: Spawner) {
 
     //Timer::after_millis(100).await;
 
-    join(button, servo).await;
+    join4(button, servo, get_led, prints).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
