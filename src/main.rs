@@ -4,7 +4,14 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
-#[rtic::app(device = stm32f4xx_hal::pac, dispatchers = [])]
+pub mod pac {
+    pub use cortex_m_rt::interrupt;
+    pub use embassy_stm32::pac::Interrupt as interrupt;
+    pub use embassy_stm32::pac::*;
+    pub use embassy_stm32::NVIC_PRIO_BITS;
+}
+
+#[rtic::app(device = crate::pac, peripherals = false, dispatchers = [])]
 mod app {
     use defmt::println;
 
@@ -17,6 +24,8 @@ mod app {
     #[init()]
     fn init(cx: init::Context) -> (Shared, Local) {
         println!("Hello world");
+        let p = embassy_stm32::init(Default::default());
+
         (Shared {}, Local {})
     }
 
