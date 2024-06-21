@@ -150,8 +150,8 @@ struct InputMainLoop {
     i2c_channel: PeripheralRef<'static, I2C1>,
     i2c_sda: PeripheralRef<'static, PB9>,
     i2c_scl: PeripheralRef<'static, PB8>,
-    i2c_dma_rx: PeripheralRef<'static, DMA1_CH7>,
-    i2c_dma_tx: PeripheralRef<'static, DMA1_CH5>,
+    i2c_dma_tx: PeripheralRef<'static, DMA1_CH7>,
+    i2c_dma_rx: PeripheralRef<'static, DMA1_CH5>,
 
     // let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
     spi_channel: PeripheralRef<'static, SPI1>,
@@ -204,7 +204,7 @@ async fn main2(ins: InputMainLoop) {
             ins.spi_mosi,
             ins.spi_miso,
             ins.spi_dma_tx,
-            ins.spi_dma_tx,
+            ins.spi_dma_rx,
             cfg,
         );
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
@@ -444,7 +444,7 @@ async fn main2(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join4(button, servo, prints).await;
+    join4(button, servo,, prints).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
