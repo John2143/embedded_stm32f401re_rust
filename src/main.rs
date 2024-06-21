@@ -2,15 +2,11 @@
 #![no_main]
 
 use bme280::i2c::AsyncBME280;
-use cortex_m::{
-    interrupt::{Mutex, Nr},
-    Peripherals,
-};
 use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
-use embassy_executor::{Executor, InterruptExecutor, Spawner};
+use embassy_executor::{Executor, InterruptExecutor};
 use embassy_futures::{
-    join::{join, join3, join4},
+    join::{join, join3},
     select::{select, Either},
 };
 use embassy_stm32::{
@@ -19,24 +15,22 @@ use embassy_stm32::{
     gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
     i2c,
     peripherals::{
-        self, DMA1_CH2, DMA1_CH3, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB13, PB3, PB6, PB8, PB9, PC13, SPI1, TIM1
+        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
+        PB8, PB9, PC13, SPI1, TIM1,
     },
     time::Hertz,
     timer::simple_pwm::{PwmPin, SimplePwm},
     Peripheral, PeripheralRef,
 };
 use embassy_sync::{
-    blocking_mutex::{raw::CriticalSectionRawMutex, CriticalSectionMutex},
+    blocking_mutex::raw::CriticalSectionRawMutex,
     channel::{Receiver, Sender},
 };
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948_async::{AccRange, GyrUnit, Icm20948};
 use static_cell::StaticCell;
 
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt_rtt as _;
 use panic_probe as _;
