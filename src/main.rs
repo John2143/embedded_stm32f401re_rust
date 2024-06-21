@@ -96,8 +96,8 @@ fn main() -> ! {
         i2c_channel: p.I2C1.into_ref(),
         i2c_sda: p.PB9.into_ref(),
         i2c_scl: p.PB8.into_ref(),
-        i2c_dma_rx: p.DMA1_CH7.into_ref(),
-        i2c_dma_tx: p.DMA1_CH5.into_ref(),
+        i2c_dma_tx: p.DMA1_CH7.into_ref(),
+        i2c_dma_rx: p.DMA1_CH5.into_ref(),
 
         spi_channel: p.SPI1.into_ref(),
         spi_sck: p.PB3.into_ref(),
@@ -106,12 +106,16 @@ fn main() -> ! {
         spi_dma_tx: p.DMA2_CH3.into_ref(),
         spi_dma_rx: p.DMA2_CH0.into_ref(),
 
+        button: p.PC13.into_ref(),
+        ir_output_timer: p.TIM1.into_ref(),
+        ir_output_pin: p.PA8.into_ref(),
+
         rx,
     };
 
     unsafe {
         EXECUTOR_NORMAL.init(Executor::new()).run(move |spawner| {
-            spawner.spawn(main2(p)).unwrap();
+            spawner.spawn(main2(main_input)).unwrap();
         });
     };
 }
@@ -444,7 +448,7 @@ async fn main2(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join4(button, servo,, prints).await;
+    join3(button, servo, prints).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
