@@ -187,7 +187,6 @@ async fn main(_spawner: Spawner) {
 
         loop {
             if SIGNAL_A.load(Ordering::SeqCst) > 0{
-                println!("Sending IR signal");
                 SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
                 join(
                     set1(&mut pwm),
@@ -198,10 +197,10 @@ async fn main(_spawner: Spawner) {
                     Timer::after_micros(4_500)
                 ).await;
 
-                for _ in 0..10 {
-                    let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
-                    let data = !data;
-                    //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
+                for _ in 0..1 {
+                    //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
+                    //let data = !data;
+                    let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
                     let range = if data < 0x0001_0000 { 16 } else { 32 };
                     for i in (0..range).rev() {
                         let bit = (data >> i) & 1;
@@ -215,9 +214,9 @@ async fn main(_spawner: Spawner) {
                     send0(&mut pwm).await;
                     Timer::after_millis(20).await;
                 }
-
-                Timer::after_millis(1000).await;
             }
+
+            Timer::after_millis(1000).await;
         }
     };
 
@@ -253,34 +252,37 @@ async fn main(_spawner: Spawner) {
     let get_led = async {
         let mut t2 = Instant::now();
         loop {
-            led_in.wait_for_falling_edge().await;
+            led_in.wait_for_low().await;
             let t1 = Instant::now();
             let time_high = t1 - t2;
             led_in.wait_for_high().await;
             t2 = Instant::now();
             let time_low = t2 - t1;
 
-            let micros_high = time_high.as_micros() as u32;
-            let micros_low = time_low.as_micros() as u32;
+            let micros_high = time_high.as_ticks() as u32;
+            let micros_low = time_low.as_ticks() as u32;
             let _ = tx.try_send((micros_high, micros_low));
         }
     };
 
 
-    const TIMEOUT_MICROS: u64 = 22_000;
     let prints = async {
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut buf = [(0, 0); 1024];
             let mut i = 0;
+            let mut start = Instant::now();
             let final_buf = loop {
                 if i == 1024 {
                     // buffer full
                     break &buf[0..1024];
                 }
-                match select(rx.receive(), Timer::after_micros(TIMEOUT_MICROS)).await {
+                match select(rx.receive(), Timer::after_millis(25)).await {
                     // We got a IR packet
                     Either::First(a) => {
+                        if i == 1 {
+                            start = Instant::now();
+                        }
                         buf[i] = a;
                         i += 1;
                     }
@@ -288,12 +290,16 @@ async fn main(_spawner: Spawner) {
                     Either::Second(_) => {
                         if i > 0 {
                             break &buf[0..i];
+                        } else {
+                            println!("Timeout");
+                            Timer::after_millis(1000).await;
                         }
                     }
                 }
             };
-            println!("ticks: {} {}", final_buf.len(), final_buf.get(0..100));
-            Timer::after_millis(10).await;
+            let time = Instant::now() - start;
+            println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
+            Timer::after_millis(100).await;
         }
     };
 
