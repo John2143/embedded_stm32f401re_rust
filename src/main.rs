@@ -129,6 +129,8 @@ async fn ir(ins: InputIRLoop) {
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
 
+    println!("Running IR Program");
+
     let mut t2 = Instant::now();
     loop {
         led_in.wait_for_low().await;
@@ -169,6 +171,7 @@ struct InputMainLoop {
 
 #[embassy_executor::task]
 async fn main2(ins: InputMainLoop) {
+    println!("Running main Program");
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
     // Internally, the led has a pullup resistor
 
