@@ -22,8 +22,11 @@ embedded-hal-bus = "0.2.0"
 icm20948-async = { git = "https://github.com/peterkrull/icm20948-async", sha = "a19c024e722d59cba2bfe716bb92599403068c89" }
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 rand = { version = "0.8.5", default-features = false }
+rtic = { version = "2.1.1", features = ["cortex-m", "rtic-monotonics", "thumbv7-backend"] }
+rtic-sync = "1.3.0"
 static_cell = "2.1.0"
 stm32-metapac = "15.0.0"
+stm32f4xx-hal = { version = "0.21.0", features = ["stm32f401"] }
 
 
 [[bin]]
