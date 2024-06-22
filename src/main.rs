@@ -339,7 +339,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             None,
             None,
             None,
-            Hertz::hz(250),
+            Hertz::hz(100),
             embassy_stm32::timer::CountingMode::EdgeAlignedUp,
         );
 
@@ -353,9 +353,15 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             let loc = (f.sin() + 1.0) / 2.0;
             let loc = loc * loc * loc;
 
-            let loc = loc * 0.5 + 0.05;
-            pwm_a.set_duty(chan, ((max as f32) * loc) as u16);
-            Timer::after_millis(10).await;
+            let loc = loc * 0.2 + 0.01;
+
+            if (f - 3.14 / 2.0) % 6.28 < 0.05 {
+                pwm_a.set_duty(chan, max);
+            } else {
+                pwm_a.set_duty(chan, ((max as f32) * loc) as u16);
+            }
+
+            Timer::after_millis(5).await;
         }
     };
 
