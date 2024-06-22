@@ -352,7 +352,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             for _ in 0..100 {
                 f += 0.03;
                 let loc = (f.sin() + 1.0) / 2.0;
-                let loc = loc * loc;
+                let loc = loc * loc * loc * loc;
 
                 let loc = loc * 0.4 + 0.01;
                 pwm_a.set_duty(chan, ((max as f32) * loc) as u16);
@@ -476,7 +476,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
     };
 
     let prints = async {
-        let mut button = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::High, Speed::Low);
+        let mut onboard_led = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut buf = [0; 2048];
@@ -502,18 +502,109 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                         if i > 0 {
                             break &mut buf[0..i];
                         } else {
+                            i = 0;
                             Timer::after_millis(250).await;
                         }
                     }
                 }
             };
-            button.set_high();
-            let time = Instant::now().duration_since(start);
-            println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
+            onboard_led.set_high();
+            //let time = Instant::now().duration_since(start);
+            println!("ticks: {}", final_buf.len());
             final_buf.sort_unstable();
-            println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
+
+            #[repr(u8)]
+            #[derive(Hash, Copy, Clone)]
+            enum Categories {
+                LowPulse,
+                ZeroPulse,
+                OnePulse,
+                InitialLow,
+            }
+
+            struct TimingCharistics {
+                low: u32,
+                zero: u32,
+                one: u32,
+                initial: u32,
+            }
+
+            let mut tot_low_pulse = 0;
+            let mut count_low_pulse = 0;
+
+            let mut tot_zero_pulse = 0;
+            let mut count_zero_pulse = 0;
+
+            let mut tot_one_pulse = 0;
+            let mut count_one_pulse = 0;
+
+            let mut tot_initial_low = 0;
+            let mut count_initial_low = 0;
+
+            let mut cur_cat = Categories::LowPulse;
+
+            let mut last = 0;
+            for &pulse_width in final_buf.iter() {
+                if pulse_width < 400 {
+                    continue;
+                }
+
+                if pulse_width > 15000 {
+                    continue;
+                }
+
+                if last == 0 {
+                    last = pulse_width;
+                }
+                match cur_cat {
+                    Categories::LowPulse => {
+                        if pulse_width - last > 200 {
+                            cur_cat = Categories::ZeroPulse;
+
+                        }
+                    },
+                    Categories::ZeroPulse => {
+                        if pulse_width - last > 500 {
+                            cur_cat = Categories::OnePulse;
+                        }
+                    },
+                    Categories::OnePulse => {
+                        if pulse_width - last > 2000 {
+                            cur_cat = Categories::InitialLow;
+                        }
+                    },
+                    Categories::InitialLow => {
+                    }
+                };
+
+                let (map, map_cnt) = match cur_cat {
+                    Categories::LowPulse => (&mut tot_low_pulse, &mut count_low_pulse),
+                    Categories::ZeroPulse => (&mut tot_zero_pulse, &mut count_zero_pulse),
+                    Categories::OnePulse => (&mut tot_one_pulse, &mut count_one_pulse),
+                    Categories::InitialLow => (&mut tot_initial_low, &mut count_initial_low),
+                };
+
+                *map += pulse_width;
+                *map_cnt += 1;
+
+                last = pulse_width;
+            }
+
+            struct TimingCharistics {
+                low: u32,
+                zero: u32,
+                one: u32,
+                initial: u32,
+            }
+
+            let low = tot_low_pulse / count_low_pulse.max(1);
+            let zero = tot_zero_pulse / count_zero_pulse.max(1);
+            let one = tot_one_pulse / count_one_pulse.max(1);
+            let initial = tot_initial_low / count_initial_low.max(1);
+
+            println!("ticks: {} {} {} {}", low, zero, one, initial);
             Timer::after_millis(100).await;
-            button.set_low();
+            onboard_led.set_low();
         }
     };
 
