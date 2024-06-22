@@ -522,6 +522,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                 InitialLow,
             }
 
+            #[derive(Default, Clone, Debug, defmt::Format)]
             struct TimingCharistics {
                 low: u32,
                 zero: u32,
@@ -529,18 +530,8 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                 initial: u32,
             }
 
-            let mut tot_low_pulse = 0;
-            let mut count_low_pulse = 0;
-
-            let mut tot_zero_pulse = 0;
-            let mut count_zero_pulse = 0;
-
-            let mut tot_one_pulse = 0;
-            let mut count_one_pulse = 0;
-
-            let mut tot_initial_low = 0;
-            let mut count_initial_low = 0;
-
+            let mut totals = TimingCharistics::default();
+            let mut counts = TimingCharistics::default();
             let mut cur_cat = Categories::LowPulse;
 
             let mut last = 0;
@@ -560,7 +551,6 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                     Categories::LowPulse => {
                         if pulse_width - last > 200 {
                             cur_cat = Categories::ZeroPulse;
-
                         }
                     },
                     Categories::ZeroPulse => {
@@ -578,10 +568,10 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                 };
 
                 let (map, map_cnt) = match cur_cat {
-                    Categories::LowPulse => (&mut tot_low_pulse, &mut count_low_pulse),
-                    Categories::ZeroPulse => (&mut tot_zero_pulse, &mut count_zero_pulse),
-                    Categories::OnePulse => (&mut tot_one_pulse, &mut count_one_pulse),
-                    Categories::InitialLow => (&mut tot_initial_low, &mut count_initial_low),
+                    Categories::LowPulse => (&mut totals.low, &mut counts.low),
+                    Categories::ZeroPulse => (&mut totals.zero, &mut counts.zero),
+                    Categories::OnePulse => (&mut totals.one, &mut counts.one),
+                    Categories::InitialLow => (&mut totals.initial, &mut counts.initial),
                 };
 
                 *map += pulse_width;
@@ -590,19 +580,14 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                 last = pulse_width;
             }
 
-            struct TimingCharistics {
-                low: u32,
-                zero: u32,
-                one: u32,
-                initial: u32,
-            }
+            let final_char = TimingCharistics {
+                low: totals.low / counts.low.max(1),
+                zero: totals.zero / counts.zero.max(1),
+                one: totals.one / counts.one.max(1),
+                initial: totals.initial / counts.initial.max(1),
+            };
 
-            let low = tot_low_pulse / count_low_pulse.max(1);
-            let zero = tot_zero_pulse / count_zero_pulse.max(1);
-            let one = tot_one_pulse / count_one_pulse.max(1);
-            let initial = tot_initial_low / count_initial_low.max(1);
-
-            println!("ticks: {} {} {} {}", low, zero, one, initial);
+            println!("ticks: {:?}", final_char);
             Timer::after_millis(100).await;
             onboard_led.set_low();
         }
