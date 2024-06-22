@@ -12,7 +12,7 @@ use embassy_futures::{
 use embassy_stm32::{
     bind_interrupts,
     exti::ExtiInput,
-    gpio::{AnyPin, Input, Level, Output, Pin, Pull, Speed},
+    gpio::{AnyPin, Input, Level, Output, Pull, Speed},
     i2c,
     interrupt::{self, InterruptExt},
     peripherals::{
@@ -32,15 +32,14 @@ use icm20948_async::{AccRange, GyrUnit, Icm20948};
 use num_traits::real::Real;
 use static_cell::StaticCell;
 
-use core::sync::atomic::AtomicU32;
-
 use defmt_rtt as _;
 use panic_probe as _;
 
 type MUTEX = CriticalSectionRawMutex;
 
-static SIGNAL_A: AtomicU32 = AtomicU32::new(0);
-static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
+//use core::sync::atomic::AtomicU32;
+//static SIGNAL_A: AtomicU32 = AtomicU32::new(0);
+//static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 //static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
 #[embassy_stm32::interrupt]
@@ -335,8 +334,8 @@ async fn idle_prio_loop(pin: AnyPin) {
 async fn low_prio_loop(ins: InputMainLoop) {
     println!("Running main Program");
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
-    // Internally, the led has a pullup resistor
 
+    // As long as we use DMA, we can issue the messages in the low prio loop
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
@@ -530,7 +529,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
     };
 
     let prints = async {
-        //let mut onboard_led = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
+        let mut onboard_led = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut buf = [0; 2048];
@@ -562,7 +561,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                     }
                 }
             };
-            //onboard_led.set_high();
+            onboard_led.set_high();
             //let time = Instant::now().duration_since(start);
             println!("ticks: {}", final_buf.len());
 
@@ -648,7 +647,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             println!("ticks: {:?} {:b}", final_char, data);
 
             Timer::after_millis(100).await;
-            //onboard_led.set_low();
+            onboard_led.set_low();
         }
     };
 
