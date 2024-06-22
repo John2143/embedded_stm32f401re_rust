@@ -481,7 +481,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut buf = [0; 2048];
             let mut i = 0;
-            let mut start = Instant::now();
+            //let mut start = Instant::now();
             let mut final_buf = loop {
                 if i == 1024 {
                     // buffer full
@@ -491,7 +491,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                     // We got a IR packet
                     Either::First(a) => {
                         if i == 1 {
-                            start = Instant::now();
+                            //start = Instant::now();
                         }
                         buf[i * 2] = a.0.as_micros() as u32;
                         buf[i * 2 + 1] = a.1.as_micros() as u32;
@@ -511,17 +511,6 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             onboard_led.set_high();
             //let time = Instant::now().duration_since(start);
             println!("ticks: {}", final_buf.len());
-            final_buf.sort_unstable();
-
-            #[repr(u8)]
-            #[derive(Hash, Copy, Clone)]
-            enum Categories {
-                LowPulse,
-                ZeroPulse,
-                OnePulse,
-                InitialLow,
-            }
-
             #[derive(Default, Clone, Debug, defmt::Format)]
             struct TimingCharistics {
                 low: u32,
@@ -532,52 +521,66 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
 
             let mut totals = TimingCharistics::default();
             let mut counts = TimingCharistics::default();
-            let mut cur_cat = Categories::LowPulse;
 
-            let mut last = 0;
-            for &pulse_width in final_buf.iter() {
-                if pulse_width < 400 {
-                    continue;
-                }
 
-                if pulse_width > 15000 {
-                    continue;
-                }
+            if final_buf.len() < 5 {
+                continue;
+            }
+            let first = final_buf[0];
+            let initial = final_buf[1];
+            let initial_high = final_buf[2];
+            let mut last_high_time = 0;
 
-                if last == 0 {
-                    last = pulse_width;
-                }
-                match cur_cat {
-                    Categories::LowPulse => {
-                        if pulse_width - last > 200 {
-                            cur_cat = Categories::ZeroPulse;
+            let mut has_discerned = false;
+            let mut unknown_total = 0;
+            let mut unknown_count = 0;
+
+            let mut chunk_iter = final_buf[3..].chunks_exact(2);
+            let mut data = [false; 32];
+            for (i, x) in chunk_iter.enumerate() {
+                let low_time = x[0];
+                let high_time = x[1];
+
+                totals.low += low_time;
+                counts.low += 1;
+
+                if last_high_time == 0 {
+                    last_high_time = high_time;
+                } else if !has_discerned {
+                    let diff = high_time.abs_diff(last_high_time);
+                    if diff < 500 {
+                        unknown_total += high_time;
+                        unknown_count += 1;
+                    } else {
+                        has_discerned = true;
+                        if high_time > last_high_time {
+                            totals.zero = unknown_total;
+                            counts.zero = unknown_count;
+                            totals.one = high_time;
+                            counts.one = 1;
+                        } else {
+                            totals.one = unknown_total;
+                            counts.one = unknown_count;
+                            totals.zero = high_time;
+                            counts.zero = 1;
+                            for k in 0..(unknown_count as usize) {
+                                data[k] = true;
+                            }
                         }
-                    },
-                    Categories::ZeroPulse => {
-                        if pulse_width - last > 500 {
-                            cur_cat = Categories::OnePulse;
-                        }
-                    },
-                    Categories::OnePulse => {
-                        if pulse_width - last > 2000 {
-                            cur_cat = Categories::InitialLow;
-                        }
-                    },
-                    Categories::InitialLow => {
                     }
-                };
+                } else {
+                    let diff_one = (totals.one / counts.one.max(1)).abs_diff(high_time);
+                    let diff_zero = (totals.zero / counts.zero.max(1)).abs_diff(high_time);
 
-                let (map, map_cnt) = match cur_cat {
-                    Categories::LowPulse => (&mut totals.low, &mut counts.low),
-                    Categories::ZeroPulse => (&mut totals.zero, &mut counts.zero),
-                    Categories::OnePulse => (&mut totals.one, &mut counts.one),
-                    Categories::InitialLow => (&mut totals.initial, &mut counts.initial),
-                };
-
-                *map += pulse_width;
-                *map_cnt += 1;
-
-                last = pulse_width;
+                    if diff_one < diff_zero {
+                        totals.one += high_time;
+                        counts.one += 1;
+                        data[i] = true;
+                    } else {
+                        totals.zero += high_time;
+                        counts.zero += 1;
+                    }
+                }
             }
 
             let final_char = TimingCharistics {
@@ -587,7 +590,8 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                 initial: totals.initial / counts.initial.max(1),
             };
 
-            println!("ticks: {:?}", final_char);
+            println!("ticks: {:?} {:b}", final_char, data);
+
             Timer::after_millis(100).await;
             onboard_led.set_low();
         }
