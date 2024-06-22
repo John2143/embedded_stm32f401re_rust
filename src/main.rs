@@ -53,15 +53,10 @@ fn I2C2_ER() {
     unsafe {EXECUTOR_NORMAL.on_interrupt()};
 }
 
-//#[embassy_stm32::interrupt]
-//fn I2C3_EV() {
-    //unsafe {EXECUTOR_LOW.on_interrupt()};
-//}
-
-//#[embassy_stm32::interrupt]
-//fn I2C3_ER() {
-    //unsafe {EXECUTOR_IDLE.on_interrupt()};
-//}
+#[embassy_stm32::interrupt]
+fn I2C3_EV() {
+    unsafe {EXECUTOR_LOW.on_interrupt()};
+}
 
 // Bind the ebassy interrupt handlers
 bind_interrupts!(struct Irqs {
@@ -73,8 +68,7 @@ bind_interrupts!(struct Irqs {
 // The high priority executor is used for the GPIO interrupts
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
-//static EXECUTOR_LOW: InterruptExecutor = InterruptExecutor::new();
-//static EXECUTOR_IDLE: InterruptExecutor = InterruptExecutor::new();
+static EXECUTOR_LOW: InterruptExecutor = InterruptExecutor::new();
 
 static IR_CHANNEL_RECEIVE: StaticCell<IrChannelReceive> = StaticCell::new();
 static IR_CHANNEL_TRANSMIT: StaticCell<IrChannelTransmit> = StaticCell::new();
@@ -122,7 +116,7 @@ fn main() -> ! {
 
         button: p.PC13.into_ref(),
 
-        //onboard_led_pin: p.PA5.into_ref(),
+        onboard_led_pin: p.PA5.into_ref(),
 
         other_output_timer: p.TIM3.into_ref(),
         other_led_pin: p.PB4.into_ref(),
@@ -148,15 +142,10 @@ fn main() -> ! {
         let spawner = EXECUTOR_NORMAL.start(chan);
         spawner.spawn(normal_prio_loop(ir_input)).unwrap();
 
-        //let chan = embassy_stm32::pac::interrupt::I2C3_EV;
-        //chan.set_priority(embassy_stm32::interrupt::Priority::P8);
-        //let spawner = EXECUTOR_LOW.start(chan);
-        //spawner.spawn(low_prio_loop(main_input)).unwrap();
-
-        //let chan = embassy_stm32::pac::interrupt::I2C3_ER;
-        //chan.set_priority(embassy_stm32::interrupt::Priority::P12);
-        //let spawner = EXECUTOR_IDLE.start(chan);
-        //spawner.spawn(idle_prio_loop(p.PA5.degrade())).unwrap();
+        let chan = embassy_stm32::pac::interrupt::I2C3_EV;
+        chan.set_priority(embassy_stm32::interrupt::Priority::P8);
+        let spawner = EXECUTOR_LOW.start(chan);
+        spawner.spawn(low_prio_loop(main_input)).unwrap();
     }
 
     // Wait for interrupts
@@ -168,10 +157,12 @@ fn main() -> ! {
 
 #[derive(Default, Clone, Debug, defmt::Format)]
 struct TimingCharistics {
-    low: u32,
-    zero: u32,
-    one: u32,
-    initial: u32,
+    initial_low: u32,
+    initial_high: u32,
+
+    bit_high_zero: u32,
+    bit_high_one: u32,
+    bit_low: u32,
 }
 
 type IrReceiveType = (Duration, Duration);
@@ -210,7 +201,7 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         ins.ir_output_timer,
         Some(PwmPin::new_ch1(
             ins.ir_output_pin,
-            embassy_stm32::gpio::OutputType::PushPull,
+            embassy_stm32::gpio::OutputType::OpenDrain,
         )),
         None,
         None,
@@ -218,6 +209,12 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         Hertz::khz(38),
         embassy_stm32::timer::CountingMode::EdgeAlignedUp,
     );
+
+
+    // When the IR receiver does not detect anything, it will output a high signal
+    // When it detects a signal, it will output a low signal
+    //
+    // So, a "1" from our perspective (transmitter) is a low signal for the receiver.
 
     async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
@@ -228,31 +225,30 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
     }
 
+    // Send a `0` bit: short low pulse, short high pulse
     async fn send0(pwm: &mut SimplePwm<'_, TIM1>, chars: &TimingCharistics) {
         set1(pwm).await;
-        Timer::after_micros(chars.low.into()).await;
+        Timer::after_micros(chars.bit_low.into()).await;
         set0(pwm).await;
-        Timer::after_micros(chars.zero.into()).await;
+        Timer::after_micros(chars.bit_high_zero.into()).await;
     }
 
+    // Send a `0` bit: short low pulse, long high pulse
     async fn send1(pwm: &mut SimplePwm<'_, TIM1>, chars: &TimingCharistics) {
         set1(pwm).await;
-        Timer::after_micros(chars.low.into()).await;
+        Timer::after_micros(chars.bit_low.into()).await;
         set0(pwm).await;
-        Timer::after_micros(chars.one.into()).await;
+        Timer::after_micros(chars.bit_high_one.into()).await;
     }
 
     set0(&mut pwm).await;
     pwm.enable(embassy_stm32::timer::Channel::Ch1);
     loop {
-        //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
-        //let data = !data;
-        //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
         let IrTransmitType { timing: char, data } = ins.rx.receive().await;
         println!("IR output");
 
-        join(set1(&mut pwm), Timer::after_micros(char.low.into())).await;
-        join(set0(&mut pwm), Timer::after_micros(char.initial.into())).await;
+        join(set1(&mut pwm), Timer::after_micros(char.initial_low.into())).await;
+        join(set0(&mut pwm), Timer::after_micros(char.initial_high.into())).await;
 
         for _ in 0..1 {
             let range = if data < 0x0001_0000 { 16 } else { 32 };
@@ -309,7 +305,7 @@ struct InputMainLoop {
     spi_dma_tx: PeripheralRef<'static, DMA2_CH3>,
     spi_dma_rx: PeripheralRef<'static, DMA2_CH0>,
 
-    //onboard_led_pin: PeripheralRef<'static, PA5>,
+    onboard_led_pin: PeripheralRef<'static, PA5>,
 
     other_output_timer: PeripheralRef<'static, TIM3>,
     other_led_pin: PeripheralRef<'static, PB4>,
@@ -508,11 +504,20 @@ async fn low_prio_loop(ins: InputMainLoop) {
             }
             println!("Button pressed!");
 
-            if SIGNAL_A.load(Ordering::SeqCst) > 0 {
-                SIGNAL_A.store(0, Ordering::SeqCst);
-            } else {
-                SIGNAL_A.store(3, Ordering::SeqCst);
-            }
+            //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
+            //let data = !data;
+            //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
+            ins.ir_transmit_tx.send(IrTransmitType {
+                timing: TimingCharistics {
+                    initial_low: 9000,
+                    initial_high: 4500,
+
+                    bit_low: 520,
+                    bit_high_zero: 2200,
+                    bit_high_one: 4400,
+                },
+                data: 0b1110_0110_0000_1001_0110_0111_1001_1000,
+            }).await;
 
             while button.is_low() {
                 Timer::after_millis(10).await;
@@ -567,8 +572,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 continue;
             }
             let first = final_buf[0];
-            let initial = final_buf[1];
+            let inital_low = final_buf[1];
             let initial_high = final_buf[2];
+
             let mut last_high_time = 0;
 
             let mut has_discerned = false;
@@ -576,13 +582,17 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let mut unknown_count = 0;
 
             let mut chunk_iter = final_buf[3..].chunks_exact(2);
+
+            let mut total_low_time = 0;
+            let mut total_low_count = chunk_iter.len();
+
+            // this is the actual data coming out of the IR remote in the form of a bitstream
             let mut data = [false; 32];
             for (i, x) in chunk_iter.enumerate() {
                 let low_time = x[0];
                 let high_time = x[1];
 
-                totals.low += low_time;
-                counts.low += 1;
+                total_low_time += low_time;
 
                 if last_high_time == 0 {
                     last_high_time = high_time;
@@ -594,40 +604,42 @@ async fn low_prio_loop(ins: InputMainLoop) {
                     } else {
                         has_discerned = true;
                         if high_time > last_high_time {
-                            totals.zero = unknown_total;
-                            counts.zero = unknown_count;
-                            totals.one = high_time;
-                            counts.one = 1;
+                            totals.bit_high_zero = unknown_total;
+                            counts.bit_high_zero = unknown_count;
+                            totals.bit_high_one = high_time;
+                            counts.bit_high_one = 1;
                         } else {
-                            totals.one = unknown_total;
-                            counts.one = unknown_count;
-                            totals.zero = high_time;
-                            counts.zero = 1;
+                            totals.bit_high_one = unknown_total;
+                            counts.bit_high_one = unknown_count;
+                            totals.bit_high_zero = high_time;
+                            counts.bit_high_zero = 1;
                             for k in 0..(unknown_count as usize) {
                                 data[k] = true;
                             }
                         }
                     }
                 } else {
-                    let diff_one = (totals.one / counts.one.max(1)).abs_diff(high_time);
-                    let diff_zero = (totals.zero / counts.zero.max(1)).abs_diff(high_time);
+                    let diff_one = (totals.bit_high_one / counts.bit_high_one.max(1)).abs_diff(high_time);
+                    let diff_zero = (totals.bit_high_zero / counts.bit_high_zero.max(1)).abs_diff(high_time);
 
                     if diff_one < diff_zero {
-                        totals.one += high_time;
-                        counts.one += 1;
+                        totals.bit_high_one += high_time;
+                        counts.bit_high_one += 1;
                         data[i] = true;
                     } else {
-                        totals.zero += high_time;
-                        counts.zero += 1;
+                        totals.bit_high_zero += high_time;
+                        counts.bit_high_zero += 1;
                     }
                 }
             }
 
             let final_char = TimingCharistics {
-                low: totals.low / counts.low.max(1),
-                zero: totals.zero / counts.zero.max(1),
-                one: totals.one / counts.one.max(1),
-                initial: totals.initial / counts.initial.max(1),
+                initial_high: inital_low,
+                initial_low: initial_high,
+
+                bit_low: total_low_time / (total_low_count as u32).max(1),
+                bit_high_zero: totals.bit_high_zero / counts.bit_high_zero.max(1),
+                bit_high_one: totals.bit_high_one / counts.bit_high_one.max(1),
             };
 
             println!("ticks: {:?} {:b}", final_char, data);
