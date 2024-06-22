@@ -873,6 +873,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "icm20948-async",
+ "num-traits",
  "panic-probe",
  "rand",
  "static_cell",

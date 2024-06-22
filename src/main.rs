@@ -6,7 +6,7 @@ use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::InterruptExecutor;
 use embassy_futures::{
-    join::{join, join3},
+    join::{join, join3, join4},
     select::{select, Either},
 };
 use embassy_stm32::{
@@ -16,7 +16,7 @@ use embassy_stm32::{
     i2c,
     interrupt::{self, InterruptExt},
     peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA11, PA5, PA6, PA7, PA8, PA9, PB10, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1
+        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA11, PA5, PA6, PA7, PA8, PA9, PB10, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM2, TIM3
     },
     time::Hertz,
     timer::simple_pwm::{PwmPin, SimplePwm},
@@ -28,6 +28,7 @@ use embassy_sync::{
 };
 use embassy_time::{Delay, Duration, Instant, Timer};
 use icm20948_async::{AccRange, GyrUnit, Icm20948};
+use num_traits::real::Real;
 use static_cell::StaticCell;
 
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -114,7 +115,9 @@ fn main() -> ! {
         ir_output_pin: p.PA8.into_ref(),
 
         onboard_led_pin: p.PA5.into_ref(),
-        other_led_pin: p.PA11.into_ref(),
+
+        other_output_timer: p.TIM3.into_ref(),
+        other_led_pin: p.PB4.into_ref(),
 
         rx,
     };
@@ -190,7 +193,9 @@ struct InputMainLoop {
     ir_output_pin: PeripheralRef<'static, PA8>,
 
     onboard_led_pin: PeripheralRef<'static, PA5>,
-    other_led_pin: PeripheralRef<'static, PA11>,
+
+    other_output_timer: PeripheralRef<'static, TIM3>,
+    other_led_pin: PeripheralRef<'static, PB4>,
 
     button: PeripheralRef<'static, PC13>,
 
@@ -324,6 +329,37 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
         }
     };
 
+    let normal_out = async {
+        let mut pwm_a = embassy_stm32::timer::simple_pwm::SimplePwm::new(
+            ins.other_output_timer,
+            Some(PwmPin::new_ch1(
+                ins.other_led_pin,
+                embassy_stm32::gpio::OutputType::OpenDrain,
+            )),
+            None,
+            None,
+            None,
+            Hertz::hz(250),
+            embassy_stm32::timer::CountingMode::EdgeAlignedUp,
+        );
+
+        let max = pwm_a.get_max_duty();
+        let chan = embassy_stm32::timer::Channel::Ch1;
+        pwm_a.set_duty(chan, max);
+        pwm_a.enable(chan);
+        let mut f = 0.0;
+        loop {
+            f += 0.01;
+            let loc = (f.sin() + 1.0) / 2.0;
+            let loc = loc * loc * loc;
+
+            let loc = loc * 0.5 + 0.05;
+            pwm_a.set_duty(chan, ((max as f32) * loc) as u16);
+            Timer::after_millis(10).await;
+        }
+    };
+
+
     // 38khz IR output
     let ir_output = async {
         // D6 / PB10 = TIM2CH3
@@ -331,7 +367,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
         // D3 / PB3 = TIM2CH2
         //
         // D7 / PA8 = TIM1CH1
-        let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
+        let mut pwm_b = embassy_stm32::timer::simple_pwm::SimplePwm::new(
             ins.ir_output_timer,
             Some(PwmPin::new_ch1(
                 ins.ir_output_pin,
@@ -339,20 +375,14 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             )),
             None,
             None,
-            Some(PwmPin::new_ch4(
-                ins.other_led_pin,
-                embassy_stm32::gpio::OutputType::PushPull,
-            )),
+            None,
             Hertz::khz(38),
             embassy_stm32::timer::CountingMode::EdgeAlignedUp,
         );
 
-        let max = pwm.get_max_duty();
-        pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
-        pwm.enable(embassy_stm32::timer::Channel::Ch1);
-
-        pwm.set_duty(embassy_stm32::timer::Channel::Ch4, max / 5);
-        pwm.enable(embassy_stm32::timer::Channel::Ch4);
+        let max = pwm_b.get_max_duty();
+        pwm_b.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
+        pwm_b.enable(embassy_stm32::timer::Channel::Ch1);
 
         async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
             pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
@@ -381,13 +411,13 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             Timer::after_nanos(B).await;
         }
 
-        set0(&mut pwm).await;
+        set0(&mut pwm_b).await;
         loop {
             if SIGNAL_A.load(Ordering::SeqCst) > 0 {
                 println!("IR output");
                 SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
-                join(set1(&mut pwm), Timer::after_millis(8)).await;
-                join(set0(&mut pwm), Timer::after_micros(4_500)).await;
+                join(set1(&mut pwm_b), Timer::after_millis(8)).await;
+                join(set0(&mut pwm_b), Timer::after_micros(4_500)).await;
 
                 for _ in 0..3 {
                     //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
@@ -397,13 +427,13 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                     for i in (0..range).rev() {
                         let bit = (data >> i) & 1;
                         if bit == 1 {
-                            send1(&mut pwm).await;
+                            send1(&mut pwm_b).await;
                         } else {
-                            send0(&mut pwm).await;
+                            send0(&mut pwm_b).await;
                         }
                     }
 
-                    send0(&mut pwm).await;
+                    send0(&mut pwm_b).await;
                     Timer::after_millis(20).await;
                 }
             }
@@ -488,7 +518,7 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join3(button, ir_output, prints).await;
+    join4(button, ir_output, prints, normal_out).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
