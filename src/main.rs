@@ -16,8 +16,7 @@ use embassy_stm32::{
     i2c,
     interrupt::{self, InterruptExt},
     peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA6, PA7, PA8, PA9, PB3, PB6,
-        PB8, PB9, PC13, SPI1, TIM1,
+        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3, PB6, PB8, PB9, PC13, SPI1, TIM1
     },
     time::Hertz,
     timer::simple_pwm::{PwmPin, SimplePwm},
@@ -114,6 +113,8 @@ fn main() -> ! {
         ir_output_timer: p.TIM1.into_ref(),
         ir_output_pin: p.PA8.into_ref(),
 
+        onboard_led_pin: p.PA5.into_ref(),
+
         rx,
     };
 
@@ -186,6 +187,8 @@ struct InputMainLoop {
 
     ir_output_timer: PeripheralRef<'static, TIM1>,
     ir_output_pin: PeripheralRef<'static, PA8>,
+
+    onboard_led_pin: PeripheralRef<'static, PA5>,
 
     button: PeripheralRef<'static, PC13>,
 
@@ -426,15 +429,16 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
     };
 
     let prints = async {
+        let mut button = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::High, Speed::Low);
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
-            let mut buf = [(0, 0); 1024];
+            let mut buf = [0; 2048];
             let mut i = 0;
             let mut start = Instant::now();
-            let final_buf = loop {
+            let mut final_buf = loop {
                 if i == 1024 {
                     // buffer full
-                    break &buf[0..1024];
+                    break &mut buf[0..1024];
                 }
                 match select(ins.rx.receive(), Timer::after_millis(10)).await {
                     // We got a IR packet
@@ -442,22 +446,27 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
                         if i == 1 {
                             start = Instant::now();
                         }
-                        buf[i] = (a.0.as_micros() as u32, a.1.as_micros() as u32);
+                        buf[i * 2] = a.0.as_micros() as u32;
+                        buf[i * 2 + 1] = a.1.as_micros() as u32;
                         i += 1;
                     }
                     // Timeout
                     Either::Second(_) => {
                         if i > 0 {
-                            break &buf[0..i];
+                            break &mut buf[0..i];
                         } else {
                             Timer::after_millis(250).await;
                         }
                     }
                 }
             };
+            button.set_high();
             let time = Instant::now().duration_since(start);
             println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
+            final_buf.sort_unstable();
+            println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
             Timer::after_millis(100).await;
+            button.set_low();
         }
     };
 
