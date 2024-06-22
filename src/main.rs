@@ -504,19 +504,17 @@ async fn low_prio_loop(ins: InputMainLoop) {
             }
             println!("Button pressed!");
 
-            //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
-            //let data = !data;
             //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
             ins.ir_transmit_tx.send(IrTransmitType {
                 timing: TimingCharistics {
                     initial_low: 9000,
                     initial_high: 4500,
 
-                    bit_low: 520,
-                    bit_high_zero: 2200,
-                    bit_high_one: 4400,
+                    bit_low: 630,
+                    bit_high_zero: 530,
+                    bit_high_one: 1641,
                 },
-                data: 0b1110_0110_0000_1001_0110_0111_1001_1000,
+                data: !0b1110_0110_0000_1001_0110_0111_1001_1000,
             }).await;
 
             while button.is_low() {
@@ -571,7 +569,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             if final_buf.len() < 5 {
                 continue;
             }
-            let first = final_buf[0];
+            let _first = final_buf[0];
             let inital_low = final_buf[1];
             let initial_high = final_buf[2];
 
@@ -581,10 +579,10 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let mut unknown_total = 0;
             let mut unknown_count = 0;
 
-            let mut chunk_iter = final_buf[3..].chunks_exact(2);
+            let chunk_iter = final_buf[3..].chunks_exact(2);
 
             let mut total_low_time = 0;
-            let mut total_low_count = chunk_iter.len();
+            let total_low_count = chunk_iter.len();
 
             // this is the actual data coming out of the IR remote in the form of a bitstream
             let mut data = [false; 32];
