@@ -77,25 +77,31 @@ static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
 //static EXECUTOR_IDLE: InterruptExecutor = InterruptExecutor::new();
 
 static IR_CHANNEL_RECEIVE: StaticCell<IrChannelReceive> = StaticCell::new();
-//static IR_CHANNEL_TRANSMIT: StaticCell<IrChannelReceive> = StaticCell::new();
+static IR_CHANNEL_TRANSMIT: StaticCell<IrChannelTransmit> = StaticCell::new();
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
     let p = embassy_stm32::init(Default::default());
 
-    let timing_channel = IR_CHANNEL_RECEIVE.init(IrChannelReceive::new());
-    let rx = timing_channel.receiver();
-    let tx = timing_channel.sender();
+    let ir_recv_channel = IR_CHANNEL_RECEIVE.init(IrChannelReceive::new());
+    let ir_recv_rx = ir_recv_channel.receiver();
+    let ir_recv_tx = ir_recv_channel.sender();
+
+    let ir_transmit_channel = IR_CHANNEL_TRANSMIT.init(IrChannelTransmit::new());
+    let ir_transmit_rx = ir_transmit_channel.receiver();
+    let ir_transmit_tx = ir_transmit_channel.sender();
 
     let ir_input = InputIRLoop {
         pin: p.PA9.into_ref(),
         exti: p.EXTI9.into_ref(),
-        tx,
+        tx: ir_recv_tx,
     };
 
     let ir_output_task = OutputIRLoop {
         ir_output_timer: p.TIM1.into_ref(),
         ir_output_pin: p.PA8.into_ref(),
+
+        rx: ir_transmit_rx,
     };
 
     let main_input = InputMainLoop {
@@ -121,7 +127,8 @@ fn main() -> ! {
         other_output_timer: p.TIM3.into_ref(),
         other_led_pin: p.PB4.into_ref(),
 
-        rx,
+        rx: ir_recv_rx,
+        ir_transmit_tx,
     };
 
     // We use I2C flags for our event loops
@@ -158,13 +165,31 @@ fn main() -> ! {
     }
 }
 
+
+#[derive(Default, Clone, Debug, defmt::Format)]
+struct TimingCharistics {
+    low: u32,
+    zero: u32,
+    one: u32,
+    initial: u32,
+}
+
 type IrReceiveType = (Duration, Duration);
 const IR_RECEIVE_COUNT: usize = 100;
 type IrChannelReceive = embassy_sync::channel::Channel<MUTEX, IrReceiveType, IR_RECEIVE_COUNT>;
 
+struct IrTransmitType {
+    timing: TimingCharistics,
+    data: u32,
+}
+
+const IR_TRANSMIT_COUNT: usize = 100;
+type IrChannelTransmit = embassy_sync::channel::Channel<MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>;
+
 struct OutputIRLoop {
     ir_output_timer: PeripheralRef<'static, TIM1>,
     ir_output_pin: PeripheralRef<'static, PA8>,
+    rx: Receiver<'static, MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>,
 }
 
 struct InputIRLoop {
@@ -175,6 +200,7 @@ struct InputIRLoop {
 
 #[embassy_executor::task]
 async fn high_prio_loop(ins: OutputIRLoop) {
+    println!("Running IR Transmitter program");
     // D6 / PB10 = TIM2CH3
     // D5 / PB4 = TIM3CH1
     // D3 / PB3 = TIM2CH2
@@ -193,10 +219,6 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         embassy_stm32::timer::CountingMode::EdgeAlignedUp,
     );
 
-    let max = pwm.get_max_duty();
-    pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
-    pwm.enable(embassy_stm32::timer::Channel::Ch1);
-
     async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
     }
@@ -206,53 +228,48 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
     }
 
-    const INSTR_TIME: i64 = 60_000;
-    const A: u64 = (562_500i64 - INSTR_TIME) as u64;
-    const B: u64 = (1_687_500i64 - INSTR_TIME * 3) as u64;
-
-    async fn send0(pwm: &mut SimplePwm<'_, TIM1>) {
+    async fn send0(pwm: &mut SimplePwm<'_, TIM1>, chars: &TimingCharistics) {
         set1(pwm).await;
-        Timer::after_nanos(A).await;
+        Timer::after_micros(chars.low.into()).await;
         set0(pwm).await;
-        Timer::after_nanos(A).await;
+        Timer::after_micros(chars.zero.into()).await;
     }
 
-    async fn send1(pwm: &mut SimplePwm<'_, TIM1>) {
+    async fn send1(pwm: &mut SimplePwm<'_, TIM1>, chars: &TimingCharistics) {
         set1(pwm).await;
-        Timer::after_nanos(A).await;
+        Timer::after_micros(chars.low.into()).await;
         set0(pwm).await;
-        Timer::after_nanos(B).await;
+        Timer::after_micros(chars.one.into()).await;
     }
 
     set0(&mut pwm).await;
+    pwm.enable(embassy_stm32::timer::Channel::Ch1);
     loop {
-        if SIGNAL_A.load(Ordering::SeqCst) > 0 {
-            println!("IR output");
-            SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
-            join(set1(&mut pwm), Timer::after_millis(8)).await;
-            join(set0(&mut pwm), Timer::after_micros(4_500)).await;
+        //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
+        //let data = !data;
+        //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
+        let IrTransmitType { timing: char, data } = ins.rx.receive().await;
+        println!("IR output");
 
-            for _ in 0..3 {
-                //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
-                //let data = !data;
-                let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
-                let range = if data < 0x0001_0000 { 16 } else { 32 };
-                for i in (0..range).rev() {
-                    let bit = (data >> i) & 1;
-                    if bit == 1 {
-                        send1(&mut pwm).await;
-                    } else {
-                        send0(&mut pwm).await;
-                    }
+        join(set1(&mut pwm), Timer::after_micros(char.low.into())).await;
+        join(set0(&mut pwm), Timer::after_micros(char.initial.into())).await;
+
+        for _ in 0..1 {
+            let range = if data < 0x0001_0000 { 16 } else { 32 };
+            for i in (0..range).rev() {
+                let bit = (data >> i) & 1;
+                if bit == 1 {
+                    send1(&mut pwm, &char).await;
+                } else {
+                    send0(&mut pwm, &char).await;
                 }
-
-                send0(&mut pwm).await;
-                Timer::after_millis(20).await;
             }
+
+            send0(&mut pwm, &char).await;
+            Timer::after_millis(20).await;
         }
 
-
-        Timer::after_millis(1000).await;
+        Timer::after_millis(50).await;
     }
 }
 
@@ -300,10 +317,12 @@ struct InputMainLoop {
     button: PeripheralRef<'static, PC13>,
 
     rx: Receiver<'static, MUTEX, IrReceiveType, IR_RECEIVE_COUNT>,
+    ir_transmit_tx: Sender<'static, MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>,
 }
 
 #[embassy_executor::task]
 async fn idle_prio_loop(pin: AnyPin) {
+    println!("Running Idle Program");
     let mut led = Output::new(pin, Level::Low, Speed::High);
 
     loop {
@@ -539,13 +558,6 @@ async fn low_prio_loop(ins: InputMainLoop) {
             //onboard_led.set_high();
             //let time = Instant::now().duration_since(start);
             println!("ticks: {}", final_buf.len());
-            #[derive(Default, Clone, Debug, defmt::Format)]
-            struct TimingCharistics {
-                low: u32,
-                zero: u32,
-                one: u32,
-                initial: u32,
-            }
 
             let mut totals = TimingCharistics::default();
             let mut counts = TimingCharistics::default();
