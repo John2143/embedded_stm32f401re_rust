@@ -302,6 +302,7 @@ dependencies = [
  "defmt",
  "document-features",
  "embassy-embedded-hal",
+ "embassy-executor",
  "embassy-futures",
  "embassy-hal-internal",
  "embassy-net-driver",

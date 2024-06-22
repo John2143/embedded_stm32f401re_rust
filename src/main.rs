@@ -57,6 +57,17 @@ static SIGNAL_A: AtomicU32 = AtomicU32::new(1);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 //static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
+
+#[embassy_stm32::interrupt]
+fn I2C2_EV() {
+    unsafe {EXECUTOR_HIGH.on_interrupt()};
+}
+
+#[embassy_stm32::interrupt]
+fn TIM5() {
+    unsafe {EXECUTOR_NORMAL.on_interrupt()};
+}
+
 bind_interrupts!(struct Irqs {
     //USB => usb::InterruptHandler<peripherals::USB>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
@@ -81,10 +92,8 @@ fn main() -> ! {
         tx,
     };
 
-    let chan = embassy_stm32::pac::interrupt::EXTI2;
+    let chan = embassy_stm32::pac::interrupt::I2C2_EV;
     chan.set_priority(embassy_stm32::interrupt::Priority::P5);
-    unsafe { chan.enable() };
-    drop(p.EXTI2);
     let spawner = EXECUTOR_HIGH.start(chan);
     spawner.spawn(ir(ir_input)).unwrap();
 
@@ -111,19 +120,12 @@ fn main() -> ! {
         rx,
     };
 
-    let chan = stm32_metapac::interrupt::EXTI3;
+    let chan = embassy_stm32::pac::interrupt::TIM5;
     chan.set_priority(embassy_stm32::interrupt::Priority::P8);
-    unsafe { chan.enable() };
-    drop(p.EXTI3);
     let spawner = EXECUTOR_NORMAL.start(chan);
     spawner.spawn(main2(main_input)).unwrap();
 
-    let mut i = 0u32;
     loop {
-        i += 1;
-        if i % 100 == 0 {
-            println!("main loop {}", i);
-        }
         cortex_m::asm::wfi();
     }
 }
@@ -140,10 +142,10 @@ struct InputIRLoop {
 
 #[embassy_executor::task]
 async fn ir(ins: InputIRLoop) {
+    println!("Running IR Program");
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
 
-    println!("Running IR Program");
 
     let mut t2 = Instant::now();
     loop {
