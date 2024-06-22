@@ -16,7 +16,7 @@ use embassy_stm32::{
     i2c,
     interrupt::{self, InterruptExt},
     peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3, PB6, PB8, PB9, PC13, SPI1, TIM1
+        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA11, PA5, PA6, PA7, PA8, PA9, PB10, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1
     },
     time::Hertz,
     timer::simple_pwm::{PwmPin, SimplePwm},
@@ -114,6 +114,7 @@ fn main() -> ! {
         ir_output_pin: p.PA8.into_ref(),
 
         onboard_led_pin: p.PA5.into_ref(),
+        other_led_pin: p.PA11.into_ref(),
 
         rx,
     };
@@ -189,6 +190,7 @@ struct InputMainLoop {
     ir_output_pin: PeripheralRef<'static, PA8>,
 
     onboard_led_pin: PeripheralRef<'static, PA5>,
+    other_led_pin: PeripheralRef<'static, PA11>,
 
     button: PeripheralRef<'static, PC13>,
 
@@ -337,7 +339,10 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
             )),
             None,
             None,
-            None,
+            Some(PwmPin::new_ch4(
+                ins.other_led_pin,
+                embassy_stm32::gpio::OutputType::PushPull,
+            )),
             Hertz::khz(38),
             embassy_stm32::timer::CountingMode::EdgeAlignedUp,
         );
@@ -345,6 +350,9 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
         let max = pwm.get_max_duty();
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, max / 2);
         pwm.enable(embassy_stm32::timer::Channel::Ch1);
+
+        pwm.set_duty(embassy_stm32::timer::Channel::Ch4, max / 5);
+        pwm.enable(embassy_stm32::timer::Channel::Ch4);
 
         async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
             pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
