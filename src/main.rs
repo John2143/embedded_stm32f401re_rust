@@ -11,14 +11,6 @@ use embassy_stm32::{
 use defmt_rtt as _;
 use panic_probe as _;
 
-pub mod pac {
-    pub use cortex_m_rt::interrupt;
-    pub use embassy_stm32::pac::Interrupt as interrupt;
-    pub use embassy_stm32::pac::*;
-    pub use embassy_stm32::NVIC_PRIO_BITS;
-}
-
-
 struct InputMainLoop {
     cs_spi1: PeripheralRef<'static, PB6>,
 
@@ -50,12 +42,14 @@ struct InputIRLoop {
     //tx: Sender<'static, MUTEX, IrType, IR_COUNT>,
 }
 
-#[rtic::app(device = crate::pac, peripherals = false, dispatchers = [EXTI2, EXTI3])]
+#[rtic::app(device = embassy_stm32::pac, peripherals = false, dispatchers = [SPI3,SPI4])]
 mod app {
     use defmt::println;
+    use dwt_systick_monotonic::DwtSystick;
+    use stm32f4xx_hal::{dwt::MonoTimer, pac::TIM5};
     use super::{InputMainLoop, InputIRLoop};
 
-    use embassy_stm32::Peripheral;
+    use embassy_stm32::{rcc::Clocks, Peripheral};
 
     #[shared]
     struct Shared {
@@ -68,8 +62,7 @@ mod app {
     }
 
     #[init()]
-    fn init(cx: init::Context) -> (Shared, Local) {
-        println!("Hello world");
+    fn init(mut cx: init::Context) -> (Shared, Local) {
         let p = embassy_stm32::init(Default::default());
 
         let input_ir_loop = InputIRLoop {
@@ -99,6 +92,12 @@ mod app {
 
         };
 
+        let ticks: DwtSystick<80_000_000> = DwtSystick::new(&mut cx.core.DCB, cx.core.DWT, cx.core.SYST, 80_000_000);
+
+        cx.core.SCB.set_sleepdeep();
+
+        println!("Peripherals initialized");
+
         (Shared {}, Local {
             input_main_loop,
             input_ir_loop,
@@ -107,10 +106,12 @@ mod app {
 
     #[task(local = [input_main_loop], priority = 5)]
     async fn main_loop(cx: main_loop::Context) {
+        println!("main loop");
     }
 
     #[task(local = [input_ir_loop], priority = 2)]
     async fn ir_loop(cx: ir_loop::Context) {
+        println!("ir loop");
     }
 }
 
