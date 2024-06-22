@@ -123,7 +123,7 @@ fn main() -> ! {
     // Setup our two executors
     {
         let chan = embassy_stm32::pac::interrupt::I2C2_EV;
-        chan.set_priority(embassy_stm32::interrupt::Priority::P1);
+        chan.set_priority(embassy_stm32::interrupt::Priority::P2);
         let spawner = EXECUTOR_HIGH.start(chan);
         spawner.spawn(high_prio_event_lop(ir_input)).unwrap();
 
