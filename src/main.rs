@@ -6,7 +6,7 @@ use defmt::println;
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::InterruptExecutor;
 use embassy_futures::{
-    join::{join, join3, join4},
+    join::{join, join3},
     select::{select, Either},
 };
 use embassy_stm32::{
@@ -16,7 +16,8 @@ use embassy_stm32::{
     i2c,
     interrupt::{self, InterruptExt},
     peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA11, PA5, PA6, PA7, PA8, PA9, PB10, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM2, TIM3
+        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3,
+        PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3,
     },
     time::Hertz,
     timer::simple_pwm::{PwmPin, SimplePwm},
@@ -31,7 +32,7 @@ use icm20948_async::{AccRange, GyrUnit, Icm20948};
 use num_traits::real::Real;
 use static_cell::StaticCell;
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::AtomicU32;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -42,20 +43,19 @@ static SIGNAL_A: AtomicU32 = AtomicU32::new(0);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 //static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
-
 #[embassy_stm32::interrupt]
 fn I2C2_EV() {
-    unsafe {EXECUTOR_HIGH.on_interrupt()};
+    unsafe { EXECUTOR_HIGH.on_interrupt() };
 }
 
 #[embassy_stm32::interrupt]
 fn I2C2_ER() {
-    unsafe {EXECUTOR_NORMAL.on_interrupt()};
+    unsafe { EXECUTOR_NORMAL.on_interrupt() };
 }
 
 #[embassy_stm32::interrupt]
 fn I2C3_EV() {
-    unsafe {EXECUTOR_LOW.on_interrupt()};
+    unsafe { EXECUTOR_LOW.on_interrupt() };
 }
 
 // Bind the ebassy interrupt handlers
@@ -154,7 +154,6 @@ fn main() -> ! {
     }
 }
 
-
 #[derive(Default, Clone, Debug, defmt::Format)]
 struct TimingCharistics {
     initial_low: u32,
@@ -210,7 +209,6 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         embassy_stm32::timer::CountingMode::EdgeAlignedUp,
     );
 
-
     // When the IR receiver does not detect anything, it will output a high signal
     // When it detects a signal, it will output a low signal
     //
@@ -248,7 +246,11 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         println!("IR output");
 
         join(set1(&mut pwm), Timer::after_micros(char.initial_low.into())).await;
-        join(set0(&mut pwm), Timer::after_micros(char.initial_high.into())).await;
+        join(
+            set0(&mut pwm),
+            Timer::after_micros(char.initial_high.into()),
+        )
+        .await;
 
         for _ in 0..1 {
             let range = if data < 0x0001_0000 { 16 } else { 32 };
@@ -505,17 +507,19 @@ async fn low_prio_loop(ins: InputMainLoop) {
             println!("Button pressed!");
 
             //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
-            ins.ir_transmit_tx.send(IrTransmitType {
-                timing: TimingCharistics {
-                    initial_low: 9000,
-                    initial_high: 4500,
+            ins.ir_transmit_tx
+                .send(IrTransmitType {
+                    timing: TimingCharistics {
+                        initial_low: 9000,
+                        initial_high: 4500,
 
-                    bit_low: 630,
-                    bit_high_zero: 530,
-                    bit_high_one: 1641,
-                },
-                data: !0b1110_0110_0000_1001_0110_0111_1001_1000,
-            }).await;
+                        bit_low: 630,
+                        bit_high_zero: 530,
+                        bit_high_one: 1641,
+                    },
+                    data: !0b1110_0110_0000_1001_0110_0111_1001_1000,
+                })
+                .await;
 
             while button.is_low() {
                 Timer::after_millis(10).await;
@@ -532,7 +536,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let mut buf = [0; 2048];
             let mut i = 0;
             //let mut start = Instant::now();
-            let mut final_buf = loop {
+            let final_buf = loop {
                 if i == 1024 {
                     // buffer full
                     break &mut buf[0..1024];
@@ -564,7 +568,6 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
             let mut totals = TimingCharistics::default();
             let mut counts = TimingCharistics::default();
-
 
             if final_buf.len() < 5 {
                 continue;
@@ -617,8 +620,10 @@ async fn low_prio_loop(ins: InputMainLoop) {
                         }
                     }
                 } else {
-                    let diff_one = (totals.bit_high_one / counts.bit_high_one.max(1)).abs_diff(high_time);
-                    let diff_zero = (totals.bit_high_zero / counts.bit_high_zero.max(1)).abs_diff(high_time);
+                    let diff_one =
+                        (totals.bit_high_one / counts.bit_high_one.max(1)).abs_diff(high_time);
+                    let diff_zero =
+                        (totals.bit_high_zero / counts.bit_high_zero.max(1)).abs_diff(high_time);
 
                     if diff_one < diff_zero {
                         totals.bit_high_one += high_time;
