@@ -53,7 +53,7 @@ async fn blink(pin: AnyPin) {
 
 type MUTEX = CriticalSectionRawMutex;
 
-static SIGNAL_A: AtomicU32 = AtomicU32::new(1);
+static SIGNAL_A: AtomicU32 = AtomicU32::new(0);
 static SIGNAL_B: AtomicU32 = AtomicU32::new(900);
 //static SIGNAL_C: AtomicU32 = AtomicU32::new(900);
 
@@ -64,7 +64,7 @@ fn I2C2_EV() {
 }
 
 #[embassy_stm32::interrupt]
-fn TIM5() {
+fn I2C2_ER() {
     unsafe {EXECUTOR_NORMAL.on_interrupt()};
 }
 
@@ -74,8 +74,10 @@ bind_interrupts!(struct Irqs {
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
 
+// The high priority executor is used for the GPIO interrupts
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
+
 static IR_CHANNEL: StaticCell<IrChannel> = StaticCell::new();
 
 #[cortex_m_rt::entry]
@@ -91,11 +93,6 @@ fn main() -> ! {
         exti: p.EXTI9.into_ref(),
         tx,
     };
-
-    let chan = embassy_stm32::pac::interrupt::I2C2_EV;
-    chan.set_priority(embassy_stm32::interrupt::Priority::P5);
-    let spawner = EXECUTOR_HIGH.start(chan);
-    spawner.spawn(ir(ir_input)).unwrap();
 
     let main_input = InputMainLoop {
         cs_spi1: p.PB6.into_ref(),
@@ -120,10 +117,21 @@ fn main() -> ! {
         rx,
     };
 
-    let chan = embassy_stm32::pac::interrupt::TIM5;
-    chan.set_priority(embassy_stm32::interrupt::Priority::P8);
-    let spawner = EXECUTOR_NORMAL.start(chan);
-    spawner.spawn(main2(main_input)).unwrap();
+    // We use I2C2 flags for our event loops
+    drop(p.I2C2);
+
+    // Setup our two executors
+    {
+        let chan = embassy_stm32::pac::interrupt::I2C2_EV;
+        chan.set_priority(embassy_stm32::interrupt::Priority::P1);
+        let spawner = EXECUTOR_HIGH.start(chan);
+        spawner.spawn(high_prio_event_lop(ir_input)).unwrap();
+
+        let chan = embassy_stm32::pac::interrupt::I2C2_ER;
+        chan.set_priority(embassy_stm32::interrupt::Priority::P8);
+        let spawner = EXECUTOR_NORMAL.start(chan);
+        spawner.spawn(normal_prio_event_loop(main_input)).unwrap();
+    }
 
     loop {
         cortex_m::asm::wfi();
@@ -141,11 +149,10 @@ struct InputIRLoop {
 }
 
 #[embassy_executor::task]
-async fn ir(ins: InputIRLoop) {
+async fn high_prio_event_lop(ins: InputIRLoop) {
     println!("Running IR Program");
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
-
 
     let mut t2 = Instant::now();
     loop {
@@ -186,7 +193,7 @@ struct InputMainLoop {
 }
 
 #[embassy_executor::task]
-async fn main2(ins: InputMainLoop) {
+async fn normal_prio_event_loop(ins: InputMainLoop) {
     println!("Running main Program");
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
     // Internally, the led has a pullup resistor
@@ -312,8 +319,8 @@ async fn main2(ins: InputMainLoop) {
         }
     };
 
-    // PWM servo example
-    let servo = async {
+    // 38khz IR output
+    let ir_output = async {
         // D6 / PB10 = TIM2CH3
         // D5 / PB4 = TIM3CH1
         // D3 / PB3 = TIM2CH2
@@ -363,13 +370,15 @@ async fn main2(ins: InputMainLoop) {
             Timer::after_nanos(B).await;
         }
 
+        set0(&mut pwm).await;
         loop {
             if SIGNAL_A.load(Ordering::SeqCst) > 0 {
+                println!("IR output");
                 SIGNAL_A.fetch_sub(1, Ordering::SeqCst);
                 join(set1(&mut pwm), Timer::after_millis(8)).await;
                 join(set0(&mut pwm), Timer::after_micros(4_500)).await;
 
-                for _ in 0..1 {
+                for _ in 0..3 {
                     //let data: u32 = 0b1110_0110_0000_1001_0110_0111_1001_1000; // power on command
                     //let data = !data;
                     let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
@@ -388,6 +397,7 @@ async fn main2(ins: InputMainLoop) {
                 }
             }
 
+
             Timer::after_millis(1000).await;
         }
     };
@@ -404,7 +414,7 @@ async fn main2(ins: InputMainLoop) {
             if SIGNAL_A.load(Ordering::SeqCst) > 0 {
                 SIGNAL_A.store(0, Ordering::SeqCst);
             } else {
-                SIGNAL_A.store(100, Ordering::SeqCst);
+                SIGNAL_A.store(3, Ordering::SeqCst);
             }
 
             while button.is_low() {
@@ -445,7 +455,7 @@ async fn main2(ins: InputMainLoop) {
                     }
                 }
             };
-            let time = Instant::now() - start;
+            let time = Instant::now().duration_since(start);
             println!("ticks: {} {} =  {}", final_buf.len(), time, final_buf);
             Timer::after_millis(100).await;
         }
@@ -461,7 +471,7 @@ async fn main2(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join3(button, servo, prints).await;
+    join3(button, ir_output, prints).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
