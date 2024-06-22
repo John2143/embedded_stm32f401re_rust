@@ -349,19 +349,22 @@ async fn normal_prio_event_loop(ins: InputMainLoop) {
         pwm_a.enable(chan);
         let mut f = 0.0;
         loop {
-            f += 0.01;
-            let loc = (f.sin() + 1.0) / 2.0;
-            let loc = loc * loc * loc;
+            for _ in 0..100 {
+                f += 0.03;
+                let loc = (f.sin() + 1.0) / 2.0;
+                let loc = loc * loc;
 
-            let loc = loc * 0.2 + 0.01;
-
-            if (f - 3.14 / 2.0) % 6.28 < 0.05 {
-                pwm_a.set_duty(chan, max);
-            } else {
+                let loc = loc * 0.4 + 0.01;
                 pwm_a.set_duty(chan, ((max as f32) * loc) as u16);
+                Timer::after_millis(50).await;
             }
 
-            Timer::after_millis(5).await;
+            // pwm_a.set_duty(chan, max);
+            // Timer::after_millis(15).await;
+            // pwm_a.set_duty(chan, 0);
+            // Timer::after_millis(0).await;
+            // pwm_a.set_duty(chan, max / 15);
+            // Timer::after_millis(10).await;
         }
     };
 
