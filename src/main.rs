@@ -65,7 +65,7 @@ bind_interrupts!(struct Irqs {
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
 
-// The high priority executor is used for the GPIO interrupts
+// DMA/hardware interrupts > HIGH > NORMAL > LOW
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_LOW: InterruptExecutor = InterruptExecutor::new();
@@ -77,10 +77,12 @@ static IR_CHANNEL_TRANSMIT: StaticCell<IrChannelTransmit> = StaticCell::new();
 fn main() -> ! {
     let p = embassy_stm32::init(Default::default());
 
+    // Every time our IR receiver gets an event, send an event on this channel with the timing info
     let ir_recv_channel = IR_CHANNEL_RECEIVE.init(IrChannelReceive::new());
     let ir_recv_rx = ir_recv_channel.receiver();
     let ir_recv_tx = ir_recv_channel.sender();
 
+    // If we want to transmit, send an event on this chanel
     let ir_transmit_channel = IR_CHANNEL_TRANSMIT.init(IrChannelTransmit::new());
     let ir_transmit_rx = ir_transmit_channel.receiver();
     let ir_transmit_tx = ir_transmit_channel.sender();
