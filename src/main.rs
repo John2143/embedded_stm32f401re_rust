@@ -73,8 +73,18 @@ static EXECUTOR_LOW: InterruptExecutor = InterruptExecutor::new();
 static IR_CHANNEL_RECEIVE: StaticCell<IrChannelReceive> = StaticCell::new();
 static IR_CHANNEL_TRANSMIT: StaticCell<IrChannelTransmit> = StaticCell::new();
 
+#[global_allocator]
+static HEAP: embedded_alloc::Heap = embedded_alloc::Heap::empty();
+
 #[cortex_m_rt::entry]
 fn main() -> ! {
+    {
+        use core::mem::MaybeUninit;
+        const HEAP_SIZE: usize = 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+    }
+
     let p = embassy_stm32::init(Default::default());
 
     // Every time our IR receiver gets an event, send an event on this channel with the timing info
@@ -548,16 +558,51 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
+        let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 50);
+        fusion.set_mode(datafusion_imu::Mode::Dof6);
+
+        let (temp, gyr, acc) = (
+            sensor.get_temperature(i2c).await.unwrap(),
+            sensor.get_gyroscope(i2c).await.unwrap().as_dps(),
+            sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
+        );
+
+        fusion.set_data_dof6(acc[0] as f32, acc[1] as f32, acc[2] as f32, gyr[0] as f32, gyr[1] as f32, gyr[2] as f32);
+        fusion.init();
+
+        let mut now = Instant::now();
+        // washington DC 2024
+        fusion.set_declination(-10.45);
         loop {
-            defmt::info!(
-                "ism330dhcx:
-    Temperature: {}C
-    Accelerometer: {:?}
-    Gyroscope: {:?}",
+
+            let (temp, gyr, acc) = (
                 sensor.get_temperature(i2c).await.unwrap(),
                 sensor.get_gyroscope(i2c).await.unwrap().as_dps(),
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
             );
+
+            let dt = now.elapsed().as_micros() as f32 / 1_000_000.0;
+            now = Instant::now();
+
+            fusion.set_data_dof6(acc[0] as f32, acc[1] as f32, acc[2] as f32, gyr[0] as f32, gyr[1] as f32, gyr[2] as f32);
+            fusion.step(dt);
+
+            let angle_x = fusion.get_x_angle();
+            let angle_y = fusion.get_y_angle();
+            let angle_z = fusion.get_z_angle();
+            let dist = fusion.get_final_distance();
+
+            defmt::info!(
+                "ism330dhcx:
+    Temperature: {}C
+    Accelerometer: {:?}
+    Gyroscope: {:?}
+    Fusion: ({}°, {}°, {}°) {}cm",
+                temp, acc, gyr,
+                angle_x, angle_y, angle_z,
+                dist
+            );
+
 
             Timer::after_millis(500).await;
         }
