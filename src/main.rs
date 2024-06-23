@@ -471,69 +471,70 @@ async fn low_prio_loop(ins: InputMainLoop) {
     };
 
     let get_sensor_6dof = async {
-        let bus = I2cDevice::new(&shared_i2c_bus);
-        let sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b).await.unwrap();
+        let mut bus = I2cDevice::new(&shared_i2c_bus);
+        let mut sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b).await.unwrap();
 
         // Initializing sensor
         // =======================================
 
+        let i2c = &mut bus;
 
         // =======================================
         // CTRL3_C
 
-        sensor.ctrl3c.set_boot(i2c, true).unwrap();
-        sensor.ctrl3c.set_bdu(i2c, true).unwrap();
-        sensor.ctrl3c.set_if_inc(i2c, true).unwrap();
+        sensor.ctrl3c.set_boot(i2c, true).await.unwrap();
+        sensor.ctrl3c.set_bdu(i2c, true).await.unwrap();
+        sensor.ctrl3c.set_if_inc(i2c, true).await.unwrap();
 
         // =======================================
         // CTRL9_XL
 
-        sensor.ctrl9xl.set_den_x(i2c, true).unwrap();
-        sensor.ctrl9xl.set_den_y(i2c, true).unwrap();
-        sensor.ctrl9xl.set_den_z(i2c, true).unwrap();
-        sensor.ctrl9xl.set_device_conf(i2c, true).unwrap();
+        sensor.ctrl9xl.set_den_x(i2c, true).await.unwrap();
+        sensor.ctrl9xl.set_den_y(i2c, true).await.unwrap();
+        sensor.ctrl9xl.set_den_z(i2c, true).await.unwrap();
+        sensor.ctrl9xl.set_device_conf(i2c, true).await.unwrap();
 
         // =======================================
         // CTRL1_XL
 
         sensor
             .ctrl1xl
-            .set_accelerometer_data_rate(i2c, ctrl1xl::Odr_Xl::Hz52)
-            .unwrap();
+            .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz52)
+            .await.unwrap();
 
         sensor
             .ctrl1xl
-            .set_chain_full_scale(i2c, ctrl1xl::Fs_Xl::G4)
-            .unwrap();
-        sensor.ctrl1xl.set_lpf2_xl_en(i2c, true).unwrap();
+            .set_chain_full_scale(i2c, ism330dhcx::ctrl1xl::Fs_Xl::G4)
+            .await.unwrap();
+        sensor.ctrl1xl.set_lpf2_xl_en(i2c, true).await.unwrap();
 
         // =======================================
         // CTRL2_G
 
         sensor
             .ctrl2g
-            .set_gyroscope_data_rate(i2c, ctrl2g::Odr::Hz52)
-            .unwrap();
+            .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz52)
+            .await.unwrap();
 
         sensor
             .ctrl2g
-            .set_chain_full_scale(i2c, ctrl2g::Fs::Dps500)
-            .unwrap();
+            .set_chain_full_scale(i2c, ism330dhcx::ctrl2g::Fs::Dps500)
+            .await.unwrap();
 
         // =======================================
         // CTRL7_G
 
-        sensor.ctrl7g.set_g_hm_mode(i2c, true).unwrap();
+        sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
         loop {
-            defmt::info!("Temperature: {}", sensor.get_temperature(&mut i2c).unwrap());
+            defmt::info!("Temperature: {}", sensor.get_temperature(i2c).await.unwrap());
             defmt::info!(
                 "Gyroscope: {:?}",
-                sensor.get_gyroscope(&mut i2c).unwrap().as_dps()
+                sensor.get_gyroscope(i2c).await.unwrap().as_dps()
             );
             defmt::info!(
                 "Accelerometer: {:?}",
-                sensor.get_accelerometer(&mut i2c).unwrap().as_m_ss()
+                sensor.get_accelerometer(i2c).await.unwrap().as_m_ss()
             );
 
             Timer::after_millis(500).await;
