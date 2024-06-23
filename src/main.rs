@@ -14,7 +14,7 @@ use embassy_stm32::{
     exti::ExtiInput,
     gpio::{AnyPin, Input, Level, Output, Pull, Speed},
     i2c,
-    interrupt::{self, InterruptExt},
+    interrupt::{self, typelevel::TIM4, InterruptExt},
     peripherals::{
         self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3,
         PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3,
@@ -181,10 +181,14 @@ type IrChannelTransmit = embassy_sync::channel::Channel<MUTEX, IrTransmitType, I
 struct OutputIRLoop {
     ir_output_timer: PeripheralRef<'static, TIM1>,
     ir_output_pin: PeripheralRef<'static, PA8>,
+
     rx: Receiver<'static, MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>,
 }
 
 struct InputIRLoop {
+    //ir_timer_a: PeripheralRef<'static, TIM4>,
+    //ir_timer_b: PeripheralRef<'static, TIM5>,
+
     pin: PeripheralRef<'static, PA9>,
     exti: PeripheralRef<'static, EXTI9>,
     tx: Sender<'static, MUTEX, IrReceiveType, IR_RECEIVE_COUNT>,
@@ -277,6 +281,8 @@ async fn normal_prio_loop(ins: InputIRLoop) {
     debug!("Running IR Program");
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
+
+    //let tim = ins.ir_timer_a;
 
     let mut t2 = Instant::now();
     loop {
@@ -553,7 +559,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
             );
 
-            Timer::after_millis(5000).await;
+            Timer::after_millis(500).await;
         }
     };
 
