@@ -472,7 +472,72 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     let get_sensor_6dof = async {
         let bus = I2cDevice::new(&shared_i2c_bus);
-        let ism = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b);
+        let sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b).await.unwrap();
+
+        // Initializing sensor
+        // =======================================
+
+
+        // =======================================
+        // CTRL3_C
+
+        sensor.ctrl3c.set_boot(i2c, true).unwrap();
+        sensor.ctrl3c.set_bdu(i2c, true).unwrap();
+        sensor.ctrl3c.set_if_inc(i2c, true).unwrap();
+
+        // =======================================
+        // CTRL9_XL
+
+        sensor.ctrl9xl.set_den_x(i2c, true).unwrap();
+        sensor.ctrl9xl.set_den_y(i2c, true).unwrap();
+        sensor.ctrl9xl.set_den_z(i2c, true).unwrap();
+        sensor.ctrl9xl.set_device_conf(i2c, true).unwrap();
+
+        // =======================================
+        // CTRL1_XL
+
+        sensor
+            .ctrl1xl
+            .set_accelerometer_data_rate(i2c, ctrl1xl::Odr_Xl::Hz52)
+            .unwrap();
+
+        sensor
+            .ctrl1xl
+            .set_chain_full_scale(i2c, ctrl1xl::Fs_Xl::G4)
+            .unwrap();
+        sensor.ctrl1xl.set_lpf2_xl_en(i2c, true).unwrap();
+
+        // =======================================
+        // CTRL2_G
+
+        sensor
+            .ctrl2g
+            .set_gyroscope_data_rate(i2c, ctrl2g::Odr::Hz52)
+            .unwrap();
+
+        sensor
+            .ctrl2g
+            .set_chain_full_scale(i2c, ctrl2g::Fs::Dps500)
+            .unwrap();
+
+        // =======================================
+        // CTRL7_G
+
+        sensor.ctrl7g.set_g_hm_mode(i2c, true).unwrap();
+
+        loop {
+            defmt::info!("Temperature: {}", sensor.get_temperature(&mut i2c).unwrap());
+            defmt::info!(
+                "Gyroscope: {:?}",
+                sensor.get_gyroscope(&mut i2c).unwrap().as_dps()
+            );
+            defmt::info!(
+                "Accelerometer: {:?}",
+                sensor.get_accelerometer(&mut i2c).unwrap().as_m_ss()
+            );
+
+            Timer::after_millis(500).await;
+        }
     };
 
     let normal_out = async {
