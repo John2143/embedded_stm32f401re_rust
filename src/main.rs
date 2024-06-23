@@ -10,18 +10,9 @@ use embassy_futures::{
     select::{select, Either},
 };
 use embassy_stm32::{
-    bind_interrupts,
-    exti::ExtiInput,
-    gpio::{AnyPin, Input, Level, Output, Pull, Speed},
-    i2c,
-    interrupt::{self, typelevel::TIM4, InterruptExt},
-    peripherals::{
-        self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3,
-        PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3,
-    },
-    time::Hertz,
-    timer::simple_pwm::{PwmPin, SimplePwm},
-    Peripheral, PeripheralRef,
+    bind_interrupts, dma::NoDma, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pull, Speed}, i2c, interrupt::{self, typelevel::TIM4, InterruptExt}, peripherals::{
+        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3, USART2
+    }, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}, usart, Peripheral, PeripheralRef
 };
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
@@ -61,6 +52,7 @@ fn I2C3_EV() {
 // Bind the ebassy interrupt handlers
 bind_interrupts!(struct Irqs {
     //USB => usb::InterruptHandler<peripherals::USB>;
+    USART2 => usart::InterruptHandler<peripherals::USART2>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
@@ -110,6 +102,15 @@ fn main() -> ! {
         rx: ir_transmit_rx,
     };
 
+    let uart = USart {
+        dma_tx: p.DMA1_CH6.into_ref(),
+        dma_rx: p.DMA1_CH5.into_ref(),
+        tx: p.PA2.into_ref(),
+        rx: p.PA3.into_ref(),
+
+        uart: p.USART2.into_ref(),
+    };
+
     let main_input = InputMainLoop {
         cs_spi1: p.PB6.into_ref(),
 
@@ -117,7 +118,7 @@ fn main() -> ! {
         i2c_sda: p.PB9.into_ref(),
         i2c_scl: p.PB8.into_ref(),
         i2c_dma_tx: p.DMA1_CH7.into_ref(),
-        i2c_dma_rx: p.DMA1_CH5.into_ref(),
+        //i2c_dma_rx: p.DMA1_CH5.into_ref(),
 
         spi_channel: p.SPI1.into_ref(),
         spi_sck: p.PB3.into_ref(),
@@ -125,6 +126,8 @@ fn main() -> ! {
         spi_miso: p.PA6.into_ref(),
         spi_dma_tx: p.DMA2_CH3.into_ref(),
         spi_dma_rx: p.DMA2_CH0.into_ref(),
+
+        uart,
 
         button: p.PC13.into_ref(),
 
@@ -314,7 +317,7 @@ struct InputMainLoop {
     i2c_sda: PeripheralRef<'static, PB9>,
     i2c_scl: PeripheralRef<'static, PB8>,
     i2c_dma_tx: PeripheralRef<'static, DMA1_CH7>,
-    i2c_dma_rx: PeripheralRef<'static, DMA1_CH5>,
+    //i2c_dma_rx: PeripheralRef<'static, DMA1_CH5>,
 
     // let spi = embassy_stm32::spi::Spi::new(p.SPI1, p.PB3, p.PA7, p.PA6, p.DMA2_CH3, p.DMA2_CH0, cfg);
     spi_channel: PeripheralRef<'static, SPI1>,
@@ -323,6 +326,8 @@ struct InputMainLoop {
     spi_miso: PeripheralRef<'static, PA6>,
     spi_dma_tx: PeripheralRef<'static, DMA2_CH3>,
     spi_dma_rx: PeripheralRef<'static, DMA2_CH0>,
+
+    uart: USart,
 
     onboard_led_pin: PeripheralRef<'static, PA5>,
 
@@ -333,6 +338,14 @@ struct InputMainLoop {
 
     rx: Receiver<'static, MUTEX, IrReceiveType, IR_RECEIVE_COUNT>,
     ir_transmit_tx: Sender<'static, MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>,
+}
+
+struct USart {
+    uart: PeripheralRef<'static, USART2>,
+    rx: PeripheralRef<'static, PA3>,
+    tx: PeripheralRef<'static, PA2>,
+    dma_tx: PeripheralRef<'static, DMA1_CH6>,
+    dma_rx: PeripheralRef<'static, DMA1_CH5>,
 }
 
 #[embassy_executor::task]
@@ -353,6 +366,26 @@ async fn low_prio_loop(ins: InputMainLoop) {
     debug!("Running main Program");
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
 
+    let shared_uart_bus = {
+        let cfg = embassy_stm32::usart::Config::default();
+        let mut uart = embassy_stm32::usart::Uart::new(
+            ins.uart.uart,
+            ins.uart.rx,
+            ins.uart.tx,
+            Irqs,
+            ins.uart.dma_tx,
+            ins.uart.dma_rx,
+            cfg,
+        ).unwrap();
+
+        loop {
+            Timer::after_millis(1000).await;
+            let mut buf = heapless::Vec::<u8, 5>::from_iter(core::iter::repeat(0).take(5));
+            uart.read(buf.as_mut()).await.unwrap();
+            info!("{}", buf);
+        }
+    };
+
     // As long as we use DMA, we can issue the messages in the low prio loop
     let shared_i2c_bus = {
         let spd = Hertz::hz(250_000);
@@ -365,13 +398,17 @@ async fn low_prio_loop(ins: InputMainLoop) {
             ins.i2c_scl,
             ins.i2c_sda,
             Irqs,
-            ins.i2c_dma_tx,
-            ins.i2c_dma_rx,
+            NoDma,
+            //ins.i2c_dma_tx,
+            NoDma,
+            //ins.i2c_dma_rx,
             spd,
             cfg,
         );
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(i2c)
     };
+
+    /*
 
     let shared_spi_bus = {
         let mut cfg = embassy_stm32::spi::Config::default();
@@ -604,7 +641,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             );
 
 
-            Timer::after_millis(500).await;
+            Timer::after_millis(50000).await;
         }
     };
 
@@ -813,4 +850,5 @@ async fn low_prio_loop(ins: InputMainLoop) {
     join5(button, prints, get_sensor_bme, get_sensor_6dof, normal_out).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
+    */
 }
