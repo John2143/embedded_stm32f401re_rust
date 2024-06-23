@@ -29,6 +29,10 @@ static_cell = "2.1.0"
 stm32-metapac = "15.0.0"
 
 
+#ism330dhcx = "0.6.0"
+ism330dhcx = { path = "../../ism330dhcx" }
+
+
 [[bin]]
 name = "stm32_1"
 test = false

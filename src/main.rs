@@ -470,6 +470,11 @@ async fn low_prio_loop(ins: InputMainLoop) {
         }
     };
 
+    let get_sensor_6dof = async {
+        let bus = I2cDevice::new(&shared_i2c_bus);
+        let ism = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b);
+    };
+
     let normal_out = async {
         let mut pwm_a = embassy_stm32::timer::simple_pwm::SimplePwm::new(
             ins.other_output_timer,
