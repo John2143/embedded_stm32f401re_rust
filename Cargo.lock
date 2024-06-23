@@ -585,6 +585,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hmc5983"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0e6ff07fa981365a06744195ed2e86e18d62cbbcab8b5759334d8975c39aa89"
+dependencies = [
+ "embedded-hal 0.2.7",
+]
+
+[[package]]
 name = "icm20948-async"
 version = "0.1.3"
 source = "git+https://github.com/peterkrull/icm20948-async#a19c024e722d59cba2bfe716bb92599403068c89"
@@ -994,6 +1003,7 @@ dependencies = [
  "embedded-hal-async",
  "embedded-hal-bus",
  "heapless",
+ "hmc5983",
  "icm20948-async",
  "ism330dhcx",
  "num-traits",
