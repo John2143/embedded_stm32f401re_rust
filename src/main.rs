@@ -6,7 +6,7 @@ use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::InterruptExecutor;
 use embassy_futures::{
-    join::{join, join3},
+    join::{join, join3, join4},
     select::{select, Either},
 };
 use embassy_stm32::{
@@ -372,19 +372,21 @@ async fn low_prio_loop(ins: InputMainLoop) {
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
     };
 
-    {
+    let _test = {
         let mut bus = I2cDevice::new(&shared_i2c_bus);
         const MAX_DEVICES: usize = 128;
         let mut connected = heapless::Vec::<u8, MAX_DEVICES>::new();
         for i in 0..128 {
             let r = bus.write(i, &[0x00]).await;
             if r.is_ok() {
-                connected.push(i).expect("Sorry, too many I2C devices conncted");
+                connected
+                    .push(i)
+                    .expect("Sorry, too many I2C devices conncted");
             }
         }
 
         info!("Connected devices (hex): {:x}", connected);
-    }
+    };
 
     // BME280 example
     let get_sensor_bme = async {
@@ -461,9 +463,15 @@ async fn low_prio_loop(ins: InputMainLoop) {
             }
             Err(e) => {
                 match e {
-                    icm20948_async::IcmError::BusError(_e) => error!("ICM20948 spi init failed: Bus error"),
-                    icm20948_async::IcmError::ImuSetupError => error!("ICM20948 spi init failed: IMU setup error"),
-                    icm20948_async::IcmError::MagSetupError => error!("ICM20948 spi init failed: MAG setup error"),
+                    icm20948_async::IcmError::BusError(_e) => {
+                        error!("ICM20948 spi init failed: Bus error")
+                    }
+                    icm20948_async::IcmError::ImuSetupError => {
+                        error!("ICM20948 spi init failed: IMU setup error")
+                    }
+                    icm20948_async::IcmError::MagSetupError => {
+                        error!("ICM20948 spi init failed: MAG setup error")
+                    }
                 };
                 None
             }
@@ -472,7 +480,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     let get_sensor_6dof = async {
         let mut bus = I2cDevice::new(&shared_i2c_bus);
-        let mut sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b).await.unwrap();
+        let mut sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b)
+            .await
+            .unwrap();
 
         // Initializing sensor
         // =======================================
@@ -500,12 +510,14 @@ async fn low_prio_loop(ins: InputMainLoop) {
         sensor
             .ctrl1xl
             .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz52)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         sensor
             .ctrl1xl
             .set_chain_full_scale(i2c, ism330dhcx::ctrl1xl::Fs_Xl::G4)
-            .await.unwrap();
+            .await
+            .unwrap();
         sensor.ctrl1xl.set_lpf2_xl_en(i2c, true).await.unwrap();
 
         // =======================================
@@ -514,12 +526,14 @@ async fn low_prio_loop(ins: InputMainLoop) {
         sensor
             .ctrl2g
             .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz52)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         sensor
             .ctrl2g
             .set_chain_full_scale(i2c, ism330dhcx::ctrl2g::Fs::Dps500)
-            .await.unwrap();
+            .await
+            .unwrap();
 
         // =======================================
         // CTRL7_G
@@ -527,7 +541,10 @@ async fn low_prio_loop(ins: InputMainLoop) {
         sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
         loop {
-            defmt::info!("Temperature: {}", sensor.get_temperature(i2c).await.unwrap());
+            defmt::info!(
+                "Temperature: {}",
+                sensor.get_temperature(i2c).await.unwrap()
+            );
             defmt::info!(
                 "Gyroscope: {:?}",
                 sensor.get_gyroscope(i2c).await.unwrap().as_dps()
@@ -537,7 +554,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss()
             );
 
-            Timer::after_millis(500).await;
+            Timer::after_millis(5000).await;
         }
     };
 
@@ -614,7 +631,8 @@ async fn low_prio_loop(ins: InputMainLoop) {
     };
 
     let prints = async {
-        let mut onboard_led = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
+        let mut onboard_led =
+            embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut ir_recv_buf = heapless::Vec::<u32, 2048>::new();
@@ -634,14 +652,14 @@ async fn low_prio_loop(ins: InputMainLoop) {
                     // Timeout
                     Either::Second(_) => {
                         if ir_recv_buf.len() > 0 {
-                            break
+                            break;
                         } else {
                             ir_recv_buf.clear();
                             Timer::after_millis(250).await;
                         }
                     }
                 }
-            };
+            }
             onboard_led.set_high();
             //let time = Instant::now().duration_since(start);
             info!("ticks: {}", ir_recv_buf.len());
@@ -742,7 +760,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join3(button, prints, normal_out).await;
+    join4(button, prints, get_sensor_bme, get_sensor_6dof).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
