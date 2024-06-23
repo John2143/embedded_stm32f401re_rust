@@ -6,7 +6,7 @@ use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::InterruptExecutor;
 use embassy_futures::{
-    join::{join, join3, join4},
+    join::{join, join5},
     select::{select, Either},
 };
 use embassy_stm32::{
@@ -542,16 +542,13 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         loop {
             defmt::info!(
-                "Temperature: {}",
-                sensor.get_temperature(i2c).await.unwrap()
-            );
-            defmt::info!(
-                "Gyroscope: {:?}",
-                sensor.get_gyroscope(i2c).await.unwrap().as_dps()
-            );
-            defmt::info!(
-                "Accelerometer: {:?}",
-                sensor.get_accelerometer(i2c).await.unwrap().as_m_ss()
+                "ism330dhcx:
+    Temperature: {}C
+    Accelerometer: {:?}
+    Gyroscope: {:?}",
+                sensor.get_temperature(i2c).await.unwrap(),
+                sensor.get_gyroscope(i2c).await.unwrap().as_dps(),
+                sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
             );
 
             Timer::after_millis(5000).await;
@@ -636,7 +633,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut ir_recv_buf = heapless::Vec::<u32, 2048>::new();
-            let mut i = 0;
+            let i = 0;
             //let mut start = Instant::now();
             loop {
                 if ir_recv_buf.is_full() {
@@ -760,7 +757,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join4(button, prints, get_sensor_bme, get_sensor_6dof).await;
+    join5(button, prints, get_sensor_bme, get_sensor_6dof, normal_out).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
