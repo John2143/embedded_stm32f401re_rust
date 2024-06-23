@@ -2,7 +2,7 @@
 #![no_main]
 
 use bme280::i2c::AsyncBME280;
-use defmt::println;
+use defmt::{debug, error, info, warn};
 use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
 use embassy_executor::InterruptExecutor;
 use embassy_futures::{
@@ -28,6 +28,7 @@ use embassy_sync::{
     channel::{Receiver, Sender},
 };
 use embassy_time::{Delay, Duration, Instant, Timer};
+use embedded_hal_async::i2c::I2c;
 use icm20948_async::{AccRange, GyrUnit, Icm20948};
 use num_traits::real::Real;
 use static_cell::StaticCell;
@@ -172,7 +173,7 @@ struct IrTransmitType {
     data: u32,
 }
 
-const IR_TRANSMIT_COUNT: usize = 100;
+const IR_TRANSMIT_COUNT: usize = 10;
 type IrChannelTransmit = embassy_sync::channel::Channel<MUTEX, IrTransmitType, IR_TRANSMIT_COUNT>;
 
 struct OutputIRLoop {
@@ -189,7 +190,7 @@ struct InputIRLoop {
 
 #[embassy_executor::task]
 async fn high_prio_loop(ins: OutputIRLoop) {
-    println!("Running IR Transmitter program");
+    debug!("Running IR Transmitter program");
     // D6 / PB10 = TIM2CH3
     // D5 / PB4 = TIM3CH1
     // D3 / PB3 = TIM2CH2
@@ -242,7 +243,6 @@ async fn high_prio_loop(ins: OutputIRLoop) {
     pwm.enable(embassy_stm32::timer::Channel::Ch1);
     loop {
         let IrTransmitType { timing: char, data } = ins.rx.receive().await;
-        println!("IR output");
 
         join(set1(&mut pwm), Timer::after_micros(char.initial_low.into())).await;
         join(
@@ -272,7 +272,7 @@ async fn high_prio_loop(ins: OutputIRLoop) {
 
 #[embassy_executor::task]
 async fn normal_prio_loop(ins: InputIRLoop) {
-    println!("Running IR Program");
+    debug!("Running IR Program");
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
 
@@ -319,7 +319,7 @@ struct InputMainLoop {
 
 #[embassy_executor::task]
 async fn idle_prio_loop(pin: AnyPin) {
-    println!("Running Idle Program");
+    debug!("Running Idle Program");
     let mut led = Output::new(pin, Level::Low, Speed::High);
 
     loop {
@@ -332,7 +332,7 @@ async fn idle_prio_loop(pin: AnyPin) {
 
 #[embassy_executor::task]
 async fn low_prio_loop(ins: InputMainLoop) {
-    println!("Running main Program");
+    debug!("Running main Program");
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
 
     // As long as we use DMA, we can issue the messages in the low prio loop
@@ -372,19 +372,33 @@ async fn low_prio_loop(ins: InputMainLoop) {
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
     };
 
+    {
+        let mut bus = I2cDevice::new(&shared_i2c_bus);
+        const MAX_DEVICES: usize = 128;
+        let mut connected = heapless::Vec::<u8, MAX_DEVICES>::new();
+        for i in 0..128 {
+            let r = bus.write(i, &[0x00]).await;
+            if r.is_ok() {
+                connected.push(i).expect("Sorry, too many I2C devices conncted");
+            }
+        }
+
+        info!("Connected devices (hex): {:x}", connected);
+    }
+
     // BME280 example
     let get_sensor_bme = async {
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
         if bme_init_res.is_err() {
-            println!("BME280 init failed!");
+            error!("BME280 init failed!");
             return None;
         }
 
         let m = bme.measure(&mut Delay).await.unwrap();
         let temp_f = m.temperature * 9.0 / 5.0 + 32.0;
-        println!(
+        warn!(
             "BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}",
             m.pressure, m.temperature, temp_f, m.humidity
         );
@@ -405,7 +419,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
         {
             Ok(mut icm) => {
                 let stuff = icm.read_9dof().await.unwrap();
-                println!(
+                warn!(
                     "ICM20948: \n acc: {} {} {}\n gyr: {} {} {}\n mag: {} {} {}",
                     stuff.acc.x,
                     stuff.acc.y,
@@ -420,7 +434,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 Some(icm)
             }
             Err(_) => {
-                println!("ICM20948 i2c init failed!");
+                error!("ICM20948 i2c init failed!");
                 None
             }
         }
@@ -439,18 +453,17 @@ async fn low_prio_loop(ins: InputMainLoop) {
         {
             Ok(mut icm) => {
                 let stuff = icm.read_6dof().await.unwrap();
-                println!(
+                warn!(
                     "ICM20948 spi: \n acc: {} {} {}\n gyr: {} {} {}\n",
                     stuff.acc.x, stuff.acc.y, stuff.acc.z, stuff.gyr.x, stuff.gyr.y, stuff.gyr.z
                 ); //, stuff.mag.x, stuff.mag.y, stuff.mag.z);
                 Some(icm)
             }
             Err(e) => {
-                println!("ICM20948 spi init failed:");
                 match e {
-                    icm20948_async::IcmError::BusError(_e) => println!("Bus error"),
-                    icm20948_async::IcmError::ImuSetupError => println!("IMU setup error"),
-                    icm20948_async::IcmError::MagSetupError => println!("MAG setup error"),
+                    icm20948_async::IcmError::BusError(_e) => error!("ICM20948 spi init failed: Bus error"),
+                    icm20948_async::IcmError::ImuSetupError => error!("ICM20948 spi init failed: IMU setup error"),
+                    icm20948_async::IcmError::MagSetupError => error!("ICM20948 spi init failed: MAG setup error"),
                 };
                 None
             }
@@ -502,8 +515,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
             // we use a pullup resistor, so the button is active low
             while button.is_high() {
                 Timer::after_millis(10).await;
+                //Timer::after_millis(1000).await;
             }
-            println!("Button pressed!");
+            info!("Button pressed!");
 
             //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
             ins.ir_transmit_tx
@@ -524,7 +538,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 Timer::after_millis(10).await;
             }
 
-            println!("Button released!");
+            info!("Button released!");
         }
     };
 
@@ -532,30 +546,26 @@ async fn low_prio_loop(ins: InputMainLoop) {
         let mut onboard_led = embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
-            let mut buf = [0; 2048];
+            let mut ir_recv_buf = heapless::Vec::<u32, 2048>::new();
             let mut i = 0;
             //let mut start = Instant::now();
-            let final_buf = loop {
-                if i == 1024 {
-                    // buffer full
-                    break &mut buf[0..1024];
+            loop {
+                if ir_recv_buf.is_full() {
+                    break;
                 }
+
                 match select(ins.rx.receive(), Timer::after_millis(10)).await {
                     // We got a IR packet
                     Either::First(a) => {
-                        if i == 1 {
-                            //start = Instant::now();
-                        }
-                        buf[i * 2] = a.0.as_micros() as u32;
-                        buf[i * 2 + 1] = a.1.as_micros() as u32;
-                        i += 1;
+                        ir_recv_buf.push(a.0.as_micros() as u32).unwrap();
+                        ir_recv_buf.push(a.1.as_micros() as u32).unwrap();
                     }
                     // Timeout
                     Either::Second(_) => {
-                        if i > 0 {
-                            break &mut buf[0..i];
+                        if ir_recv_buf.len() > 0 {
+                            break
                         } else {
-                            i = 0;
+                            ir_recv_buf.clear();
                             Timer::after_millis(250).await;
                         }
                     }
@@ -563,17 +573,17 @@ async fn low_prio_loop(ins: InputMainLoop) {
             };
             onboard_led.set_high();
             //let time = Instant::now().duration_since(start);
-            println!("ticks: {}", final_buf.len());
+            info!("ticks: {}", ir_recv_buf.len());
 
             let mut totals = TimingCharistics::default();
             let mut counts = TimingCharistics::default();
 
-            if final_buf.len() < 5 {
+            if ir_recv_buf.len() < 5 {
                 continue;
             }
-            let _first = final_buf[0];
-            let inital_low = final_buf[1];
-            let initial_high = final_buf[2];
+            let _first = ir_recv_buf[0];
+            let inital_low = ir_recv_buf[1];
+            let initial_high = ir_recv_buf[2];
 
             let mut last_high_time = 0;
 
@@ -581,7 +591,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let mut unknown_total = 0;
             let mut unknown_count = 0;
 
-            let chunk_iter = final_buf[3..].chunks_exact(2);
+            let chunk_iter = ir_recv_buf[3..].chunks_exact(2);
 
             let mut total_low_time = 0;
             let total_low_count = chunk_iter.len();
@@ -644,7 +654,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 bit_high_one: totals.bit_high_one / counts.bit_high_one.max(1),
             };
 
-            println!("ticks: {:?} {:b}", final_char, data);
+            debug!("ticks: {:?} {:b}", final_char, data);
 
             Timer::after_millis(100).await;
             onboard_led.set_low();
