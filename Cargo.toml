@@ -29,8 +29,8 @@ static_cell = "2.1.0"
 stm32-metapac = "15.0.0"
 
 
-#ism330dhcx = { git = "https://github.com/John2143/ism330dhcx", branch = "async" }
-ism330dhcx = { path = "../../ism330dhcx" }
+ism330dhcx = { git = "https://github.com/John2143/ism330dhcx" }
+#ism330dhcx = { path = "../../ism330dhcx" }
 
 
 [[bin]]
