@@ -423,7 +423,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     // BME280 example
     let get_sensor_bme = async {
-        return None;
+        Timer::after_millis(100).await;
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
@@ -481,7 +481,6 @@ async fn low_prio_loop(ins: InputMainLoop) {
     let imu_bus =
         embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs_icm20948);
     let get_sensor_imu_spi = async {
-        return None;
         match Icm20948::new_spi(imu_bus, Delay)
             .gyr_unit(GyrUnit::Dps)
             .gyr_dlp(icm20948_async::GyrDlp::Hz24)
@@ -517,27 +516,24 @@ async fn low_prio_loop(ins: InputMainLoop) {
     let get_sensor_mag = async {
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut sensor = mmc5983ma::MMC5983::new(bus, Delay, 0x30);
+
+        sensor.init().await.unwrap();
         sensor
             .set_cmm_mode(
-                mmc5983ma::ContinuousMeasurementFreq::Hz50,
+                mmc5983ma::ContinuousMeasurementFreq::Hz100,
                 mmc5983ma::PeriodicSetInterval::Per500,
             )
             .await
             .unwrap();
-
-        sensor.init().await.unwrap();
         sensor
     };
 
     let get_sensor_6dof = async {
+        info!("loading mag esensor");
         let mut sm = get_sensor_mag.await;
 
-        let x = sm.do_measurement_raw().await.unwrap();
-        Timer::after_millis(100).await;
-        let t = sm.get_temp_c().await.unwrap();
-
         //let t = ();
-        info!("MAG: {:?}, temp={}c", x, t);
+        //info!("MAG: {:?}, temp={}c", x, t);
 
         //connected_i2c_addresses.await;
         info!("Ok, ICM setup next");
@@ -571,7 +567,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor
             .ctrl1xl
-            .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz52)
+            .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz104)
             .await
             .unwrap();
 
@@ -587,7 +583,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor
             .ctrl2g
-            .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz52)
+            .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz104)
             .await
             .unwrap();
 
@@ -603,23 +599,27 @@ async fn low_prio_loop(ins: InputMainLoop) {
         sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
         let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 25);
-        fusion.set_mode(datafusion_imu::Mode::Dof6);
+        fusion.set_mode(datafusion_imu::Mode::Dof9);
 
         info!("Setting up datafusion");
 
-        let (_, gyr, acc) = (
+        let (_, gyr, acc, mag) = (
             sensor.get_temperature(i2c).await.unwrap(),
             sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
             sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
+            sm.get_measurement_gauss().await.unwrap(),
         );
 
-        fusion.set_data_dof6(
+        fusion.set_data_dof9(
             acc[0] as f32,
             acc[1] as f32,
             acc[2] as f32,
             gyr[0] as f32,
             gyr[1] as f32,
             gyr[2] as f32,
+            mag.x * 0.1,
+            mag.y * 0.1,
+            mag.z * 0.1,
         );
         fusion.init();
 
@@ -627,14 +627,13 @@ async fn low_prio_loop(ins: InputMainLoop) {
         // washington DC 2024
         fusion.set_declination(-10.45);
 
-        Timer::after_millis(5000).await;
         info!("Starting fusion program");
         for i in 0.. {
             let (temp, gyr, acc, mag) = (
                 sensor.get_temperature(i2c).await.unwrap(),
                 sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
-                sm.do_measurement_raw().await.unwrap(),
+                sm.get_measurement_gauss().await.unwrap(),
             );
 
             let dt = now.elapsed().as_micros() as f32 / 1_000_000.0;
@@ -647,6 +646,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 gyr[0] as f32,
                 gyr[1] as f32,
                 gyr[2] as f32,
+                mag.x * 0.1,
+                mag.y * 0.1,
+                mag.z * 0.1,
             );
             fusion.step(dt);
 
@@ -661,10 +663,12 @@ async fn low_prio_loop(ins: InputMainLoop) {
         Temperature: {}C
         Accelerometer: {:?}
         Gyroscope: {:?}
-        Fusion: ({}°, {}°, {}°) {}cm",
+        Magnetometer: {:?}
+        Fusion: (\n\t{}°, \n\t{}°, \n\t{}°) {}cm",
                     temp,
                     acc,
                     gyr,
+                    mag,
                     angle_x,
                     angle_y,
                     angle_z,
@@ -672,7 +676,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 );
             }
 
-            Timer::after_millis(50).await;
+            Timer::after_millis(10).await;
         }
     };
 
