@@ -212,6 +212,7 @@ async fn high_prio_loop(ins: OutputIRLoop) {
     // D3 / PB3 = TIM2CH2
     //
     // D7 / PA8 = TIM1CH1
+    const CARRIER: Hertz = Hertz::khz(38);
     let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
         ins.ir_output_timer,
         Some(PwmPin::new_ch1(
@@ -221,7 +222,7 @@ async fn high_prio_loop(ins: OutputIRLoop) {
         None,
         None,
         None,
-        Hertz::khz(38),
+        CARRIER,
         embassy_stm32::timer::CountingMode::EdgeAlignedUp,
     );
 
@@ -229,6 +230,7 @@ async fn high_prio_loop(ins: OutputIRLoop) {
     // When it detects a signal, it will output a low signal
     //
     // So, a "1" from our perspective (transmitter) is a low signal for the receiver.
+
 
     async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
@@ -257,8 +259,19 @@ async fn high_prio_loop(ins: OutputIRLoop) {
 
     set0(&mut pwm).await;
     pwm.enable(embassy_stm32::timer::Channel::Ch1);
+
     loop {
         let IrTransmitType { timing: char, data } = ins.rx.receive().await;
+
+        let carrier_microseconds = 1_000_000.0 / (CARRIER.0 as f32);
+        let mut bitstream = heapless::Vec::<u32, 400>::new();
+
+        use core::iter::repeat;
+        let off = 0;
+        let on = pwm.get_max_duty() / 2;
+
+        let dur = (char.initial_low as f32) / carrier_microseconds;
+        bitstream.extend(repeat(0).take(dur as usize));
 
         join(set1(&mut pwm), Timer::after_micros(char.initial_low.into())).await;
         join(
@@ -390,7 +403,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
     };
 
-    let _test = {
+    let _connected_i2c_addresses = {
         let mut bus = I2cDevice::new(&shared_i2c_bus);
         const MAX_DEVICES: usize = 128;
         let mut connected = heapless::Vec::<u8, MAX_DEVICES>::new();
@@ -404,6 +417,8 @@ async fn low_prio_loop(ins: InputMainLoop) {
         }
 
         info!("Connected devices (hex): {:x}", connected);
+
+        connected
     };
 
     // BME280 example
@@ -422,6 +437,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             "BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}",
             m.pressure, m.temperature, temp_f, m.humidity
         );
+        Timer::after_millis(500).await;
 
         Some(bme)
     };
