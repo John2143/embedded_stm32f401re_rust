@@ -444,7 +444,6 @@ async fn low_prio_loop(ins: InputMainLoop) {
             "BME: \n\tpressure: {}\n\ttemp: {}C ({}f)\n\thumid: {}",
             m.pressure, m.temperature, temp_f, m.humidity
         );
-        Timer::after_millis(500).await;
 
         Some(bme)
     };
@@ -520,6 +519,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
     };
 
     let get_sensor_6dof = async {
+        info!("Ok, ICM setup next");
         let mut bus = I2cDevice::new(&shared_i2c_bus);
         let mut sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b)
             .await
@@ -581,22 +581,16 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
-        let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 50);
+        let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 25);
         fusion.set_mode(datafusion_imu::Mode::Dof6);
 
-        let (temp, gyr, acc) = (
+        info!("Setting up datafusion");
+
+        let (_, gyr, acc) = (
             sensor.get_temperature(i2c).await.unwrap(),
             sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
             sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
         );
-
-        const DEGREES_TO_RADIANS: f32 = 0.0174533;
-        // convert gyr degrees per second to rps
-        let gyr = [
-            (gyr[0] as f32) * DEGREES_TO_RADIANS,
-            (gyr[1] as f32) * DEGREES_TO_RADIANS,
-            (gyr[2] as f32) * DEGREES_TO_RADIANS,
-        ];
 
         fusion.set_data_dof6(
             acc[0] as f32,
@@ -623,11 +617,6 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let dt = now.elapsed().as_micros() as f32 / 1_000_000.0;
             now = Instant::now();
 
-            //let gyr = [
-                //(gyr[0] as f32) * DEGREES_TO_RADIANS,
-                //(gyr[1] as f32) * DEGREES_TO_RADIANS,
-                //(gyr[2] as f32) * DEGREES_TO_RADIANS,
-            //];
             fusion.set_data_dof6(
                 acc[0] as f32,
                 acc[1] as f32,
@@ -643,7 +632,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let angle_z = fusion.get_z_angle();
             let dist = fusion.get_final_distance();
 
-            if i % 10 == 0 {
+            if i % 25 == 0 {
                 defmt::info!(
                     "ism330dhcx:
         Temperature: {}C
@@ -660,7 +649,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 );
             }
 
-            Timer::after_millis(10).await;
+            Timer::after_millis(50).await;
         }
     };
 
@@ -739,6 +728,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
     let prints = async {
         let mut onboard_led =
             embassy_stm32::gpio::Output::new(ins.onboard_led_pin, Level::Low, Speed::Low);
+        Timer::after_millis(2000).await;
         loop {
             //println!("new_ticks {}, {:?}", read.len(), read.get(0..20));
             let mut ir_recv_buf = heapless::Vec::<u32, 2048>::new();
@@ -866,7 +856,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     //Timer::after_millis(100).await;
 
-    join5(button, prints, get_sensor_bme, get_sensor_6dof, normal_out).await;
+    join5(get_sensor_6dof, button, prints, get_sensor_bme, normal_out).await;
     //servo.await;
     //let ptr = shared_spi_bus.lock().await;
 }
