@@ -198,7 +198,6 @@ struct OutputIRLoop {
 struct InputIRLoop {
     //ir_timer_a: PeripheralRef<'static, TIM4>,
     //ir_timer_b: PeripheralRef<'static, TIM5>,
-
     pin: PeripheralRef<'static, PA9>,
     exti: PeripheralRef<'static, EXTI9>,
     tx: Sender<'static, MUTEX, IrReceiveType, IR_RECEIVE_COUNT>,
@@ -206,7 +205,6 @@ struct InputIRLoop {
 
 #[embassy_executor::task]
 async fn high_prio_loop(ins: OutputIRLoop) {
-    debug!("Running IR Transmitter program");
     // D6 / PB10 = TIM2CH3
     // D5 / PB4 = TIM3CH1
     // D3 / PB3 = TIM2CH2
@@ -230,7 +228,6 @@ async fn high_prio_loop(ins: OutputIRLoop) {
     // When it detects a signal, it will output a low signal
     //
     // So, a "1" from our perspective (transmitter) is a low signal for the receiver.
-
 
     async fn set0(pwm: &mut SimplePwm<'_, TIM1>) {
         pwm.set_duty(embassy_stm32::timer::Channel::Ch1, 0);
@@ -259,6 +256,8 @@ async fn high_prio_loop(ins: OutputIRLoop) {
 
     set0(&mut pwm).await;
     pwm.enable(embassy_stm32::timer::Channel::Ch1);
+    Timer::after_secs(1).await;
+    debug!("Running IR Transmitter program");
 
     loop {
         let IrTransmitType { timing: char, data } = ins.rx.receive().await;
@@ -301,9 +300,10 @@ async fn high_prio_loop(ins: OutputIRLoop) {
 
 #[embassy_executor::task]
 async fn normal_prio_loop(ins: InputIRLoop) {
-    debug!("Running IR Program");
     let led_in = Input::new(ins.pin, Pull::None);
     let mut led_in = ExtiInput::new(led_in, ins.exti);
+    Timer::after_secs(1).await;
+    debug!("Running IR Program");
 
     //let tim = ins.ir_timer_a;
 
@@ -403,16 +403,23 @@ async fn low_prio_loop(ins: InputMainLoop) {
         embassy_sync::mutex::Mutex::<CriticalSectionRawMutex, _>::new(spi)
     };
 
-    let _connected_i2c_addresses = {
+    let connected_i2c_addresses = async {
         let mut bus = I2cDevice::new(&shared_i2c_bus);
         const MAX_DEVICES: usize = 128;
         let mut connected = heapless::Vec::<u8, MAX_DEVICES>::new();
         for i in 0..128 {
-            let r = bus.write(i, &[0x00]).await;
-            if r.is_ok() {
-                connected
-                    .push(i)
-                    .expect("Sorry, too many I2C devices conncted");
+            let r = select(bus.write(i, &[0x00]), Timer::after_millis(10)).await;
+            match r {
+                Either::First(bus_resposne) => {
+                    if bus_resposne.is_ok() {
+                        connected
+                            .push(i)
+                            .expect("Sorry, too many I2C devices conncted");
+                    }
+                }
+                Either::Second(_) => {
+                    //Timeotu
+                }
             }
         }
 
@@ -579,28 +586,56 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         let (temp, gyr, acc) = (
             sensor.get_temperature(i2c).await.unwrap(),
-            sensor.get_gyroscope(i2c).await.unwrap().as_dps(),
+            sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
             sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
         );
 
-        fusion.set_data_dof6(acc[0] as f32, acc[1] as f32, acc[2] as f32, gyr[0] as f32, gyr[1] as f32, gyr[2] as f32);
+        const DEGREES_TO_RADIANS: f32 = 0.0174533;
+        // convert gyr degrees per second to rps
+        let gyr = [
+            (gyr[0] as f32) * DEGREES_TO_RADIANS,
+            (gyr[1] as f32) * DEGREES_TO_RADIANS,
+            (gyr[2] as f32) * DEGREES_TO_RADIANS,
+        ];
+
+        fusion.set_data_dof6(
+            acc[0] as f32,
+            acc[1] as f32,
+            acc[2] as f32,
+            gyr[0] as f32,
+            gyr[1] as f32,
+            gyr[2] as f32,
+        );
         fusion.init();
 
         let mut now = Instant::now();
         // washington DC 2024
         fusion.set_declination(-10.45);
-        loop {
 
+        info!("Starting fusion program");
+        for i in 0.. {
             let (temp, gyr, acc) = (
                 sensor.get_temperature(i2c).await.unwrap(),
-                sensor.get_gyroscope(i2c).await.unwrap().as_dps(),
+                sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
             );
 
             let dt = now.elapsed().as_micros() as f32 / 1_000_000.0;
             now = Instant::now();
 
-            fusion.set_data_dof6(acc[0] as f32, acc[1] as f32, acc[2] as f32, gyr[0] as f32, gyr[1] as f32, gyr[2] as f32);
+            //let gyr = [
+                //(gyr[0] as f32) * DEGREES_TO_RADIANS,
+                //(gyr[1] as f32) * DEGREES_TO_RADIANS,
+                //(gyr[2] as f32) * DEGREES_TO_RADIANS,
+            //];
+            fusion.set_data_dof6(
+                acc[0] as f32,
+                acc[1] as f32,
+                acc[2] as f32,
+                gyr[0] as f32,
+                gyr[1] as f32,
+                gyr[2] as f32,
+            );
             fusion.step(dt);
 
             let angle_x = fusion.get_x_angle();
@@ -608,19 +643,24 @@ async fn low_prio_loop(ins: InputMainLoop) {
             let angle_z = fusion.get_z_angle();
             let dist = fusion.get_final_distance();
 
-            defmt::info!(
-                "ism330dhcx:
-    Temperature: {}C
-    Accelerometer: {:?}
-    Gyroscope: {:?}
-    Fusion: ({}°, {}°, {}°) {}cm",
-                temp, acc, gyr,
-                angle_x, angle_y, angle_z,
-                dist
-            );
+            if i % 10 == 0 {
+                defmt::info!(
+                    "ism330dhcx:
+        Temperature: {}C
+        Accelerometer: {:?}
+        Gyroscope: {:?}
+        Fusion: ({}°, {}°, {}°) {}cm",
+                    temp,
+                    acc,
+                    gyr,
+                    angle_x,
+                    angle_y,
+                    angle_z,
+                    dist
+                );
+            }
 
-
-            Timer::after_millis(500).await;
+            Timer::after_millis(10).await;
         }
     };
 
