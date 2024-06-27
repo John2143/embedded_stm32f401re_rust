@@ -368,7 +368,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     // As long as we use DMA, we can issue the messages in the low prio loop
     let shared_i2c_bus = {
-        let spd = Hertz::hz(100_000);
+        let spd = Hertz::hz(400_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
@@ -520,8 +520,8 @@ async fn low_prio_loop(ins: InputMainLoop) {
         sensor.init().await.unwrap();
         sensor
             .set_cmm_mode(
-                mmc5983ma::ContinuousMeasurementFreq::Hz100,
-                mmc5983ma::PeriodicSetInterval::Per500,
+                mmc5983ma::ContinuousMeasurementFreq::Hz200,
+                mmc5983ma::PeriodicSetInterval::Per2000,
             )
             .await
             .unwrap();
@@ -567,7 +567,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor
             .ctrl1xl
-            .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz104)
+            .set_accelerometer_data_rate(i2c, ism330dhcx::ctrl1xl::Odr_Xl::Hz416)
             .await
             .unwrap();
 
@@ -583,7 +583,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor
             .ctrl2g
-            .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz104)
+            .set_gyroscope_data_rate(i2c, ism330dhcx::ctrl2g::Odr::Hz416)
             .await
             .unwrap();
 
@@ -676,7 +676,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 );
             }
 
-            Timer::after_millis(10).await;
+            Timer::after_millis(5).await;
         }
     };
 
