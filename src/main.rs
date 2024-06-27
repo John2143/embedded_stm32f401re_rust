@@ -368,7 +368,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     // As long as we use DMA, we can issue the messages in the low prio loop
     let shared_i2c_bus = {
-        let spd = Hertz::hz(250_000);
+        let spd = Hertz::hz(100_000);
         let mut cfg = embassy_stm32::i2c::Config::default();
         cfg.sda_pullup = true;
         cfg.scl_pullup = true;
@@ -408,18 +408,11 @@ async fn low_prio_loop(ins: InputMainLoop) {
         const MAX_DEVICES: usize = 128;
         let mut connected = heapless::Vec::<u8, MAX_DEVICES>::new();
         for i in 0..128 {
-            let r = select(bus.write(i, &[0x00]), Timer::after_millis(10)).await;
-            match r {
-                Either::First(bus_resposne) => {
-                    if bus_resposne.is_ok() {
-                        connected
-                            .push(i)
-                            .expect("Sorry, too many I2C devices conncted");
-                    }
-                }
-                Either::Second(_) => {
-                    //Timeotu
-                }
+            let r = bus.write(i, &[0x2f]).await;
+            if r.is_ok() {
+                connected
+                    .push(i)
+                    .expect("Sorry, too many I2C devices conncted");
             }
         }
 
@@ -430,6 +423,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     // BME280 example
     let get_sensor_bme = async {
+        return None;
         let bus = I2cDevice::new(&shared_i2c_bus);
         let mut bme = AsyncBME280::new_secondary(bus);
         let bme_init_res = bme.init(&mut Delay).await;
@@ -450,6 +444,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     // ICM20948 example
     let get_sensor_imu_i2c = async {
+        return None;
         let bus = I2cDevice::new(&shared_i2c_bus);
         match Icm20948::new_i2c(bus, Delay)
             .gyr_unit(GyrUnit::Dps)
@@ -486,6 +481,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
     let imu_bus =
         embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice::new(&shared_spi_bus, cs_icm20948);
     let get_sensor_imu_spi = async {
+        return None;
         match Icm20948::new_spi(imu_bus, Delay)
             .gyr_unit(GyrUnit::Dps)
             .gyr_dlp(icm20948_async::GyrDlp::Hz24)
@@ -518,7 +514,32 @@ async fn low_prio_loop(ins: InputMainLoop) {
         }
     };
 
+    let get_sensor_mag = async {
+        let bus = I2cDevice::new(&shared_i2c_bus);
+        let mut sensor = mmc5983ma::MMC5983::new(bus, Delay, 0x30);
+        sensor
+            .set_cmm_mode(
+                mmc5983ma::ContinuousMeasurementFreq::Hz50,
+                mmc5983ma::PeriodicSetInterval::Per500,
+            )
+            .await
+            .unwrap();
+
+        sensor.init().await.unwrap();
+        sensor
+    };
+
     let get_sensor_6dof = async {
+        let mut sm = get_sensor_mag.await;
+
+        let x = sm.do_measurement_raw().await.unwrap();
+        Timer::after_millis(100).await;
+        let t = sm.get_temp_c().await.unwrap();
+
+        //let t = ();
+        info!("MAG: {:?}, temp={}c", x, t);
+
+        //connected_i2c_addresses.await;
         info!("Ok, ICM setup next");
         let mut bus = I2cDevice::new(&shared_i2c_bus);
         let mut sensor = ism330dhcx::Ism330Dhcx::new_with_address(&mut bus, 0x6b)
@@ -606,18 +627,20 @@ async fn low_prio_loop(ins: InputMainLoop) {
         // washington DC 2024
         fusion.set_declination(-10.45);
 
+        Timer::after_millis(5000).await;
         info!("Starting fusion program");
         for i in 0.. {
-            let (temp, gyr, acc) = (
+            let (temp, gyr, acc, mag) = (
                 sensor.get_temperature(i2c).await.unwrap(),
                 sensor.get_gyroscope(i2c).await.unwrap().as_rad(),
                 sensor.get_accelerometer(i2c).await.unwrap().as_m_ss(),
+                sm.do_measurement_raw().await.unwrap(),
             );
 
             let dt = now.elapsed().as_micros() as f32 / 1_000_000.0;
             now = Instant::now();
 
-            fusion.set_data_dof6(
+            fusion.set_data_dof9(
                 acc[0] as f32,
                 acc[1] as f32,
                 acc[2] as f32,
@@ -694,6 +717,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
     let button = async {
         let button = embassy_stm32::gpio::Input::new(ins.button, Pull::Up);
+
         loop {
             // we use a pullup resistor, so the button is active low
             while button.is_high() {
@@ -702,20 +726,19 @@ async fn low_prio_loop(ins: InputMainLoop) {
             }
             info!("Button pressed!");
 
-            //let data: u32 = 0b0000_0000_0000_0000_1100_0000_0111_1000; // vol up
             ins.ir_transmit_tx
-                .send(IrTransmitType {
-                    timing: TimingCharistics {
-                        initial_low: 9000,
-                        initial_high: 4500,
+            .send(IrTransmitType {
+            timing: TimingCharistics {
+            initial_low: 9000,
+            initial_high: 4500,
 
-                        bit_low: 630,
-                        bit_high_zero: 530,
-                        bit_high_one: 1641,
-                    },
-                    data: !0b1110_0110_0000_1001_0110_0111_1001_1000,
-                })
-                .await;
+            bit_low: 630,
+            bit_high_zero: 530,
+            bit_high_one: 1641,
+            },
+            data: !0b1110_0110_0000_1001_0110_0111_1001_1000,
+            })
+            .await;
 
             while button.is_low() {
                 Timer::after_millis(10).await;

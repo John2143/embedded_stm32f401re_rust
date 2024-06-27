@@ -39,6 +39,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46afbd2983a5d5a7bd740ccb198caf5b82f45c40c09c0eed36052d91cb92e719"
 
 [[package]]
+name = "bitfield"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c821a6e124197eb56d907ccc2188eab1038fb919c914f47976e64dd8dbc855d1"
+
+[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -94,7 +100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
 dependencies = [
  "bare-metal",
- "bitfield",
+ "bitfield 0.13.2",
  "critical-section",
  "embedded-hal 0.2.7",
  "volatile-register",
@@ -654,6 +660,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
+name = "mmc5983ma"
+version = "0.1.0-rc1"
+dependencies = [
+ "bitfield 0.15.0",
+ "defmt",
+ "embedded-hal-async",
+]
+
+[[package]]
 name = "nalgebra"
 version = "0.31.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -996,6 +1011,7 @@ dependencies = [
  "heapless",
  "icm20948-async",
  "ism330dhcx",
+ "mmc5983ma",
  "num-traits",
  "panic-probe",
  "phf",
