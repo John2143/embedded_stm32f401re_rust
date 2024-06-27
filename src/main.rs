@@ -14,7 +14,7 @@ use embassy_stm32::{
     exti::ExtiInput,
     gpio::{AnyPin, Input, Level, Output, Pull, Speed},
     i2c,
-    interrupt::{self, typelevel::TIM4, InterruptExt},
+    interrupt::{self, InterruptExt},
     peripherals::{
         self, DMA1_CH5, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA5, PA6, PA7, PA8, PA9, PB3,
         PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3,
@@ -617,9 +617,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
             gyr[0] as f32,
             gyr[1] as f32,
             gyr[2] as f32,
-            mag.x * 0.1,
-            mag.y * 0.1,
-            mag.z * 0.1,
+            mag.x * 0.01,
+            mag.y * 0.01,
+            mag.z * 0.01,
         );
         fusion.init();
 
