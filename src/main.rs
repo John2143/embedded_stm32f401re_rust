@@ -598,8 +598,9 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         sensor.ctrl7g.set_g_hm_mode(i2c, true).await.unwrap();
 
-        let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 25);
+        let mut fusion = datafusion_imu::Fusion::new(0.05, 20.0, 50);
         fusion.set_mode(datafusion_imu::Mode::Dof9);
+        fusion.disable_distance(true);
 
         info!("Setting up datafusion");
 
@@ -646,16 +647,15 @@ async fn low_prio_loop(ins: InputMainLoop) {
                 gyr[0] as f32,
                 gyr[1] as f32,
                 gyr[2] as f32,
-                mag.x * 0.1,
-                mag.y * 0.1,
-                mag.z * 0.1,
+                mag.x * 0.01,
+                mag.y * 0.01,
+                mag.z * 0.01,
             );
             fusion.step(dt);
 
             let angle_x = fusion.get_x_angle();
             let angle_y = fusion.get_y_angle();
             let angle_z = fusion.get_z_angle();
-            let dist = fusion.get_final_distance();
 
             if i % 25 == 0 {
                 defmt::info!(
@@ -664,7 +664,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
         Accelerometer: {:?}
         Gyroscope: {:?}
         Magnetometer: {:?}
-        Fusion: (\n\t{}°, \n\t{}°, \n\t{}°) {}cm",
+        Fusion: (\n\t{}°, \n\t{}°, \n\t{}°\n\t) {} deg heading",
                     temp,
                     acc,
                     gyr,
@@ -672,7 +672,7 @@ async fn low_prio_loop(ins: InputMainLoop) {
                     angle_x,
                     angle_y,
                     angle_z,
-                    dist
+                    fusion.get_heading(),
                 );
             }
 
