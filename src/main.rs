@@ -11,7 +11,7 @@ use embassy_futures::{
 };
 use embassy_stm32::{
     bind_interrupts, dma::NoDma, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pull, Speed}, i2c, interrupt::{self, typelevel::TIM4, InterruptExt}, peripherals::{
-        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH3, EXTI9, I2C1, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3, USART2
+        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH1, DMA2_CH3, DMA2_CH6, EXTI9, I2C1, PA11, PA12, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3, USART2, USART6
     }, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}, usart, Peripheral, PeripheralRef
 };
 use embassy_sync::{
@@ -52,7 +52,7 @@ fn I2C3_EV() {
 // Bind the ebassy interrupt handlers
 bind_interrupts!(struct Irqs {
     //USB => usb::InterruptHandler<peripherals::USB>;
-    USART2 => usart::InterruptHandler<peripherals::USART2>;
+    USART6 => usart::InterruptHandler<peripherals::USART6>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
 });
@@ -103,12 +103,12 @@ fn main() -> ! {
     };
 
     let uart = USart {
-        dma_tx: p.DMA1_CH6.into_ref(),
-        dma_rx: p.DMA1_CH5.into_ref(),
-        tx: p.PA2.into_ref(),
-        rx: p.PA3.into_ref(),
+        dma_tx: p.DMA2_CH6.into_ref(),
+        dma_rx: p.DMA2_CH1.into_ref(),
+        tx: p.PA11.into_ref(),
+        rx: p.PA12.into_ref(),
 
-        uart: p.USART2.into_ref(),
+        uart: p.USART6.into_ref(),
     };
 
     let main_input = InputMainLoop {
@@ -341,11 +341,11 @@ struct InputMainLoop {
 }
 
 struct USart {
-    uart: PeripheralRef<'static, USART2>,
-    rx: PeripheralRef<'static, PA3>,
-    tx: PeripheralRef<'static, PA2>,
-    dma_tx: PeripheralRef<'static, DMA1_CH6>,
-    dma_rx: PeripheralRef<'static, DMA1_CH5>,
+    uart: PeripheralRef<'static, USART6>,
+    rx: PeripheralRef<'static, PA12>,
+    tx: PeripheralRef<'static, PA11>,
+    dma_tx: PeripheralRef<'static, DMA2_CH6>,
+    dma_rx: PeripheralRef<'static, DMA2_CH1>,
 }
 
 #[embassy_executor::task]
@@ -380,13 +380,15 @@ async fn low_prio_loop(ins: InputMainLoop) {
             cfg,
         ).unwrap();
 
+        info!("waiting for uart");
         loop {
             Timer::after_millis(1000).await;
-            //let mut buf = heapless::Vec::<u8, 5>::from_iter(core::iter::repeat(0).take(5));
-            uart_tx.write(b"yee haw\r\n").await.unwrap();
+            let mut buf = [0; 32];
+            let len = uart_tx.read_until_idle(&mut buf).await.unwrap();
             Timer::after_millis(500).await;
-            info!("ya");
+            info!("UART: {:?}, {}", buf, len);
         }
+        return;
     };
 
     // As long as we use DMA, we can issue the messages in the low prio loop
