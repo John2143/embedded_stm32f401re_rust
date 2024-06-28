@@ -367,8 +367,10 @@ async fn low_prio_loop(ins: InputMainLoop) {
     let cs_icm20948 = Output::new(ins.cs_spi1, Level::High, Speed::High);
 
     let shared_uart_bus = {
-        let cfg = embassy_stm32::usart::Config::default();
-        let mut uart = embassy_stm32::usart::Uart::new(
+        let mut cfg = embassy_stm32::usart::Config::default();
+        cfg.baudrate = 9600;
+
+        let mut uart_tx = embassy_stm32::usart::Uart::new(
             ins.uart.uart,
             ins.uart.rx,
             ins.uart.tx,
@@ -380,9 +382,10 @@ async fn low_prio_loop(ins: InputMainLoop) {
 
         loop {
             Timer::after_millis(1000).await;
-            let mut buf = heapless::Vec::<u8, 5>::from_iter(core::iter::repeat(0).take(5));
-            uart.read(buf.as_mut()).await.unwrap();
-            info!("{}", buf);
+            //let mut buf = heapless::Vec::<u8, 5>::from_iter(core::iter::repeat(0).take(5));
+            uart_tx.write(b"yee haw\r\n").await.unwrap();
+            Timer::after_millis(500).await;
+            info!("ya");
         }
     };
 
