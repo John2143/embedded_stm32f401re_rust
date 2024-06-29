@@ -1,37 +1,14 @@
 #![no_std]
 #![no_main]
 
-use defmt::{debug, error, info, warn};
-use embassy_embedded_hal::shared_bus::asynch::i2c::I2cDevice;
+use defmt::debug;
 use embassy_executor::InterruptExecutor;
-use embassy_futures::{
-    join::{join, join5},
-    select::{select, Either},
-};
 use embassy_stm32::{
     bind_interrupts,
-    dma::NoDma,
-    exti::ExtiInput,
-    gpio::{AnyPin, Input, Level, Output, Pull, Speed},
-    i2c,
-    interrupt::{self, typelevel::TIM4, InterruptExt},
-    peripherals::{
-        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH1, DMA2_CH3, DMA2_CH6,
-        EXTI9, I2C1, PA11, PA12, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13,
-        PC4, SPI1, TIM1, TIM3, USART2, USART6, USB,
-    },
-    time::Hertz,
-    timer::simple_pwm::{PwmPin, SimplePwm},
-    usart, usb, Peripheral, PeripheralRef,
+    interrupt::{self, InterruptExt},
 };
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex,
-    channel::{Receiver, Sender},
-};
-use embassy_time::{Delay, Duration, Instant, Timer};
-use embedded_hal_async::i2c::I2c;
-use num_traits::real::Real;
-use static_cell::StaticCell;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_time::Timer;
 
 use defmt_rtt as _;
 use panic_probe as _;
@@ -55,7 +32,7 @@ fn I2C3_EV() {
 
 // Bind the ebassy interrupt handlers
 bind_interrupts!(struct Irqs {
-    USB => usb::InterruptHandler<peripherals::USB>;
+    //USB => usb::InterruptHandler<peripherals::USB>;
     //USART6 => usart::InterruptHandler<peripherals::USART6>;
     //I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
     //I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
