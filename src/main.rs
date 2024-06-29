@@ -40,7 +40,7 @@ bind_interrupts!(struct Irqs {
 
 // DMA/hardware interrupts > HIGH > NORMAL > LOW
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
-static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
+//static EXECUTOR_NORMAL: InterruptExecutor = InterruptExecutor::new();
 static EXECUTOR_LOW: InterruptExecutor = InterruptExecutor::new();
 
 //static IR_CHANNEL_RECEIVE: StaticCell<IrChannelReceive> = StaticCell::new();
