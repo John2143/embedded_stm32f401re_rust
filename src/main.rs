@@ -11,7 +11,7 @@ use embassy_futures::{
 };
 use embassy_stm32::{
     bind_interrupts, dma::NoDma, exti::ExtiInput, gpio::{AnyPin, Input, Level, Output, Pull, Speed}, i2c, interrupt::{self, typelevel::TIM4, InterruptExt}, peripherals::{
-        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH1, DMA2_CH3, DMA2_CH6, EXTI9, I2C1, PA11, PA12, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13, SPI1, TIM1, TIM3, USART2, USART6
+        self, DMA1_CH4, DMA1_CH5, DMA1_CH6, DMA1_CH7, DMA2_CH0, DMA2_CH1, DMA2_CH3, DMA2_CH6, EXTI9, I2C1, PA11, PA12, PA2, PA3, PA5, PA6, PA7, PA8, PA9, PB3, PB4, PB6, PB8, PB9, PC13, PC4, SPI1, TIM1, TIM3, USART2, USART6
     }, time::Hertz, timer::simple_pwm::{PwmPin, SimplePwm}, usart, Peripheral, PeripheralRef
 };
 use embassy_sync::{
@@ -113,6 +113,7 @@ fn main() -> ! {
 
     let main_input = InputMainLoop {
         cs_spi1: p.PB6.into_ref(),
+        cs_spi2: p.PC4.into_ref(),
 
         i2c_channel: p.I2C1.into_ref(),
         i2c_sda: p.PB9.into_ref(),
@@ -312,6 +313,7 @@ async fn normal_prio_loop(ins: InputIRLoop) {
 
 struct InputMainLoop {
     cs_spi1: PeripheralRef<'static, PB6>,
+    cs_spi2: PeripheralRef<'static, PC4>,
 
     i2c_channel: PeripheralRef<'static, I2C1>,
     i2c_sda: PeripheralRef<'static, PB9>,
@@ -380,13 +382,15 @@ async fn low_prio_loop(ins: InputMainLoop) {
             cfg,
         ).unwrap();
 
+        //let gps = adafruit_gps::Gps::new(port, baud_rate)
+
         info!("waiting for uart");
         loop {
-            Timer::after_millis(1000).await;
-            let mut buf = [0; 32];
+            let mut buf = [0; 256];
             let len = uart_tx.read_until_idle(&mut buf).await.unwrap();
-            Timer::after_millis(500).await;
-            info!("UART: {:?}, {}", buf, len);
+            let buf = &buf[..len];
+            let buf = core::str::from_utf8(buf).unwrap();
+            info!("UART data len: {}\n{}", len, buf);
         }
         return;
     };
