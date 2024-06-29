@@ -13,25 +13,24 @@ defmt-rtt = "0.4.1"
 embassy-embedded-hal = { version = "0.1.0", features = ["defmt"] }
 embassy-executor = { version = "0.5.0", features = ["arch-cortex-m", "task-arena-size-32768", "executor-interrupt", "integrated-timers", "defmt"] }
 embassy-futures = { version = "0.1.1", features = ["defmt"] }
-embassy-stm32 = { version = "0.1.0", features = ["stm32f401re", "rt", "defmt", "time", "unstable-pac", "time-driver-any", "exti"] }
+embassy-stm32 = { version = "0.1.0", features = ["rt", "defmt", "time", "unstable-pac", "time-driver-any", "exti", "stm32wb55vg"] }
 embassy-sync = { version = "0.5.0", features = ["defmt"] }
 embassy-time = "0.3.1"
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
 embedded-hal-bus = "0.2.0"
+
 heapless = { version = "0.8.0", features = ["defmt-03"] }
-icm20948-async = { git = "https://github.com/peterkrull/icm20948-async", sha = "a19c024e722d59cba2bfe716bb92599403068c89" }
+embedded-alloc = "0.5.1"
+#icm20948-async = { git = "https://github.com/peterkrull/icm20948-async", sha = "a19c024e722d59cba2bfe716bb92599403068c89" }
 num-traits = { version = "0.2.19", features = ["libm"], default-features = false }
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
-phf = { version = "0.11.2", default-features = false, features = ["macros", "phf_macros"] }
 rand = { version = "0.8.5", default-features = false }
 static_cell = "2.1.0"
-stm32-metapac = "15.0.0"
 
 
-ism330dhcx = { git = "https://github.com/John2143/ism330dhcx" }
-datafusion_imu = "0.1.3"
-embedded-alloc = "0.5.1"
+#ism330dhcx = { git = "https://github.com/John2143/ism330dhcx" }
+#datafusion_imu = "0.1.3"
 #adafruit_gps = "0.4.1"
 #ism330dhcx = { path = "../../ism330dhcx" }
 
