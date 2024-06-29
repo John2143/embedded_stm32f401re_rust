@@ -31,12 +31,14 @@ fn I2C3_EV() {
 }
 
 // Bind the ebassy interrupt handlers
-bind_interrupts!(struct Irqs {
-    //USB => usb::InterruptHandler<peripherals::USB>;
-    //USART6 => usart::InterruptHandler<peripherals::USART6>;
-    //I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
-    //I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
-});
+bind_interrupts!(
+    struct Irqs {
+        //USB => usb::InterruptHandler<peripherals::USB>;
+        //USART6 => usart::InterruptHandler<peripherals::USART6>;
+        //I2C3_EV => i2c::EventInterruptHandler<peripherals::I2C3>;
+        //I2C3_ER => i2c::ErrorInterruptHandler<peripherals::I2C3>;
+    }
+);
 
 // DMA/hardware interrupts > HIGH > NORMAL > LOW
 static EXECUTOR_HIGH: InterruptExecutor = InterruptExecutor::new();
